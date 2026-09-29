@@ -134,6 +134,23 @@ export function EnterpriseApp({
   useEffect(() => () => socket?.close(), [socket]);
 
   const activeCase = bootstrap.activeCase;
+  function createCase(submittedDraft: CaseDraft) {
+    void run(async () => {
+      const created = await api.createCase(submittedDraft, bootstrap.csrfToken);
+      setCases(await api.cases(spaceId));
+      setDraft({ serviceSpaceId: spaceId, serviceObjectId: "", title: "", category: "" });
+      disconnect();
+      await api.activateCase(created.id, bootstrap.csrfToken);
+      await refresh();
+    });
+  }
+  const caseForm = (
+    <EnterpriseCaseForm
+      t={t} spaceId={spaceId} objects={objects} draft={draft}
+      setDraft={setDraft} busy={busy}
+      onCreate={createCase}
+    />
+  );
   return (
     <div className="flex h-dvh min-h-dvh flex-col bg-background text-ui-base text-foreground">
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-header px-4 py-2">
@@ -275,13 +292,18 @@ export function EnterpriseApp({
                   onSubmit={(event) => {
                     event.preventDefault();
                     void run(async () => {
-                      await api.createObject(
+                      const created = await api.createObject(
                         spaceId,
                         objectName.trim(),
                         objectType.trim(),
                         bootstrap.csrfToken,
                       );
                       setObjects(await api.objects(spaceId));
+                      setDraft((current) => ({
+                        ...current,
+                        serviceSpaceId: spaceId,
+                        serviceObjectId: created.id,
+                      }));
                       setObjectName("");
                       setObjectType("");
                     });
@@ -369,31 +391,11 @@ export function EnterpriseApp({
             ) : (
               <div className="mx-auto flex w-full max-w-lg flex-col gap-4 p-4">
                 <h1 className="text-ui-lg">{t.noCase}</h1>
+                <p className="text-ui-sm text-foreground-subtle">{t.caseHint}</p>
+                {caseForm}
               </div>
             )}
-            <EnterpriseCaseForm
-              t={t}
-              spaceId={spaceId}
-              objects={objects}
-              draft={draft}
-              setDraft={setDraft}
-              busy={busy}
-              onCreate={(submittedDraft) =>
-                void run(async () => {
-                  const created = await api.createCase(submittedDraft, bootstrap.csrfToken);
-                  setCases(await api.cases(spaceId));
-                  setDraft({
-                    serviceSpaceId: spaceId,
-                    serviceObjectId: "",
-                    title: "",
-                    category: "",
-                  });
-                  disconnect();
-                  await api.activateCase(created.id, bootstrap.csrfToken);
-                  await refresh();
-                })
-              }
-            />
+            {activeCase && caseForm}
           </main>
         </div>
       )}

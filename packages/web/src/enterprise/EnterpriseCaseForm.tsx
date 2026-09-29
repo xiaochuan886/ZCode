@@ -23,7 +23,7 @@ export function EnterpriseCaseForm({
   const submittedDraft = { ...draft, serviceSpaceId: spaceId };
   return (
     <form
-      className="flex flex-wrap items-center gap-2 border-t border-border bg-panel p-3"
+      className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-panel p-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (isCompleteCaseDraft(submittedDraft)) onCreate(submittedDraft);
@@ -63,7 +63,7 @@ export function EnterpriseCaseForm({
         placeholder={t.category}
       />
       <button className={primary} disabled={busy || !isCompleteCaseDraft(submittedDraft)}>
-        {t.create}
+        {t.createAndEnter}
       </button>
     </form>
   );
