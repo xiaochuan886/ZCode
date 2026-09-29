@@ -55,6 +55,28 @@ test("syncs only supplied enterprise skills and preserves native skills", async 
   assert.deepEqual((await readdir(join(workspacePath, ".zcode", "skills"))).sort(), ["native"]);
 });
 
+test("preserves native Skill and MCP names that happen to use the enterprise prefix", async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
+  const native = join(workspacePath, ".zcode", "skills", "enterprise-native");
+  await mkdir(native, { recursive: true });
+  await writeFile(join(native, "SKILL.md"), "native prefix skill");
+  await writeFile(
+    join(workspacePath, ".zcode", "config.json"),
+    JSON.stringify({
+      mcp: { servers: { "enterprise-native": { url: "https://native.example" } } },
+    }),
+  );
+  await prepareCaseWorkspace({
+    workspacePath,
+    caseContext: context,
+    sharedSkills: [],
+    mcpServers: {},
+  });
+  assert.equal(await readFile(join(native, "SKILL.md"), "utf8"), "native prefix skill");
+  const config = JSON.parse(await readFile(join(workspacePath, ".zcode", "config.json"), "utf8"));
+  assert.equal(config.mcp.servers["enterprise-native"].url, "https://native.example");
+});
+
 test("rejects invalid skill path and hash", async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
   await assert.rejects(
@@ -99,11 +121,15 @@ test("merges MCP bindings without exposing stale enterprise endpoints", async ()
       mcp: {
         servers: {
           native: { url: "https://native.example" },
-          "enterprise-old": { url: "https://old.example" },
         },
       },
     }),
   );
+  await prepareCaseWorkspace({
+    workspacePath,
+    caseContext: context,
+    mcpServers: { old: { url: "https://old.example" } },
+  });
   await prepareCaseWorkspace({
     workspacePath,
     caseContext: context,
