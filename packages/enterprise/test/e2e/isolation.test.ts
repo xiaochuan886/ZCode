@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -14,6 +16,43 @@ import { EnterpriseStore } from "../../src/store.js";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.RUN_ENTERPRISE_DOCKER_E2E === "1";
+
+async function webSocketHandshake(
+  port: number,
+  origin: string,
+  cookie?: string,
+): Promise<{ status: number; socket: Socket }> {
+  const socket = connect(port, "127.0.0.1");
+  socket.on("error", () => undefined);
+  const headers = [
+    "GET /ws HTTP/1.1",
+    `Host: 127.0.0.1:${port}`,
+    `Origin: ${origin}`,
+    "Connection: Upgrade",
+    "Upgrade: websocket",
+    `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+    "Sec-WebSocket-Version: 13",
+    ...(cookie ? [`Cookie: ${cookie}`] : []),
+    "",
+    "",
+  ];
+  const status = await new Promise<number>((resolve, reject) => {
+    let received = "";
+    const timeout = setTimeout(() => reject(new Error("WebSocket handshake timed out")), 10_000);
+    const onData = (chunk: Buffer) => {
+      received += chunk.toString();
+      if (!received.includes("\r\n\r\n")) return;
+      clearTimeout(timeout);
+      socket.off("data", onData);
+      const parsed = Number(received.match(/^HTTP\/1\.1 (\d{3})/)?.[1]);
+      if (!parsed) reject(new Error(`Unexpected WebSocket handshake: ${received}`));
+      else resolve(parsed);
+    };
+    socket.on("data", onData);
+    socket.once("connect", () => socket.write(headers.join("\r\n")));
+  });
+  return { status, socket };
+}
 
 test(
   "container gateway isolates two tenants, native endpoints, workspace, Skill and MCP",
@@ -76,6 +115,7 @@ test(
     });
     await gateway.listen();
     const base = `http://127.0.0.1:${(gateway.server.address() as AddressInfo).port}`;
+    const port = (gateway.server.address() as AddressInfo).port;
 
     async function login(email: string): Promise<{ cookie: string; csrf: string }> {
       const response = await fetch(`${base}/api/enterprise/login`, {
@@ -108,6 +148,9 @@ test(
       const sessionA = await login("a@example.test");
       const memberA = await login("a-member@example.test");
       const sessionB = await login("b@example.test");
+      const deniedSocket = await webSocketHandshake(port, base);
+      assert.equal(deniedSocket.status, 401);
+      deniedSocket.socket.destroy();
       assert.equal((await activate(caseA.id, memberA)).status, 200);
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
       assert.equal((await activate(caseB.id, sessionB)).status, 200);
@@ -143,6 +186,8 @@ test(
       assert.equal(infoB.status, 200);
       assert.match(JSON.stringify(await infoA.json()), new RegExp(caseA.id));
       assert.match(JSON.stringify(await infoB.json()), new RegExp(caseB.id));
+      const activeSocket = await webSocketHandshake(port, base, sessionA.cookie);
+      assert.equal(activeSocket.status, 101);
 
       const bindingB = runtimes.getBinding(caseB);
       assert.ok(bindingB);
@@ -208,7 +253,15 @@ test(
       assert.notEqual(runtimes.getBinding(caseA)?.token, firstBinding.token);
 
       // A second workspace replaces the active route for this browser session.
+      const oldSocketClosed = once(activeSocket.socket, "close");
       assert.equal((await activate(caseA2.id, sessionA)).status, 200);
+      await Promise.race([
+        oldSocketClosed,
+        new Promise((_, reject) => {
+          const timer = setTimeout(() => reject(new Error("Old Case socket remained open")), 5000);
+          timer.unref();
+        }),
+      ]);
       const switched = await fetch(`${base}/api/server-info`, {
         headers: { cookie: sessionA.cookie },
       });
