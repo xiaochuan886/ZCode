@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { prepareCaseWorkspace } from "../src/materialize.js";
+
+const execFileAsync = promisify(execFile);
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const context = {
   caseId: "case-a",
@@ -158,4 +164,44 @@ test("merges MCP bindings without exposing stale enterprise endpoints", async ()
   assert.equal(config.mcp.servers.native.url, "https://native.example");
   assert.equal(config.mcp.servers["enterprise-new"].url, "https://new.example");
   assert.equal(config.mcp.servers["enterprise-old"], undefined);
+});
+
+test("native ZCode loaders discover a materialized Skill and MCP binding", async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-native-loader-"));
+  await prepareCaseWorkspace({
+    workspacePath,
+    caseContext: context,
+    sharedSkills: [{ id: "support", name: "Support", content: "# Support\n\nInvestigate the Case.\n" }],
+    mcpServers: { knowledge: { type: "http", url: "https://knowledge.example/mcp" } },
+  });
+
+  // Run the actual ZCode adapters in a child process so enterprise's TypeScript
+  // project does not import source files across its package boundary.
+  const probe = `
+    import { createNodeSkillAdapter } from './apps/zcode-cli/packages/adapters/src/skills/index.ts';
+    import { loadProjectConfigs } from './apps/zcode-cli/packages/adapters/src/config/project-config.adapter.ts';
+    const workspacePath = process.env.ZCODE_TEST_WORKSPACE;
+    if (!workspacePath) throw new Error('Missing test workspace');
+    void (async () => {
+      const skills = await createNodeSkillAdapter().discoverSkills({ workingDirectory: workspacePath });
+      const config = loadProjectConfigs(workspacePath);
+      console.log(JSON.stringify({
+        skills: skills.skills.map((skill) => skill.name),
+        mcpServerNames: config.mcpServerNames,
+        diagnostics: config.diagnostics,
+      }));
+    })();
+  `;
+  const { stdout } = await execFileAsync("pnpm", ["exec", "tsx", "-e", probe], {
+    cwd: repositoryRoot,
+    env: { ...process.env, ZCODE_TEST_WORKSPACE: workspacePath },
+  });
+  const loaded = JSON.parse(stdout.trim().split("\n").at(-1) ?? "") as {
+    skills: string[];
+    mcpServerNames: string[];
+    diagnostics: Array<{ severity: string }>;
+  };
+  assert.ok(loaded.skills.includes("enterprise-support"));
+  assert.ok(loaded.mcpServerNames.includes("enterprise-knowledge"));
+  assert.equal(loaded.diagnostics.filter((item) => item.severity === "error").length, 0);
 });
