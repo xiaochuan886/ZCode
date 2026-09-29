@@ -27,7 +27,13 @@ test(
     const a = store.bootstrapAdmin("Tenant A", "a@example.test", hash);
     const b = store.bootstrapAdmin("Tenant B", "b@example.test", hash);
     const spaceA = store.createServiceSpace(a.user.id, a.tenant.id, { name: "A space" });
+    const spaceA2 = store.createServiceSpace(a.user.id, a.tenant.id, { name: "A second space" });
     const spaceB = store.createServiceSpace(b.user.id, b.tenant.id, { name: "B space" });
+    store.provisionUser(a.user.id, a.tenant.id, {
+      email: "a-member@example.test",
+      passwordHash: hash,
+      role: "member",
+    });
     const objectA = store.createServiceObject(a.user.id, spaceA.id, {
       name: "Object A",
       type: "application",
@@ -37,6 +43,11 @@ test(
       type: "application",
     });
     const caseA = store.createCase(a.user.id, objectA.id, { title: "A case", category: "support" });
+    const objectA2 = store.createServiceObject(a.user.id, spaceA2.id, {
+      name: "Object A2",
+      type: "application",
+    });
+    const caseA2 = store.createCase(a.user.id, objectA2.id, { title: "A second case", category: "support" });
     const caseB = store.createCase(b.user.id, objectB.id, { title: "B case", category: "support" });
     store.createSkill(a.user.id, caseA.id, {
       name: "Private A",
@@ -95,7 +106,9 @@ test(
 
     try {
       const sessionA = await login("a@example.test");
+      const memberA = await login("a-member@example.test");
       const sessionB = await login("b@example.test");
+      assert.equal((await activate(caseA.id, memberA)).status, 200);
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
       assert.equal((await activate(caseB.id, sessionB)).status, 200);
       assert.equal((await activate(caseB.id, sessionA)).status, 404);
@@ -105,6 +118,18 @@ test(
             headers: { cookie: sessionA.cookie },
           })
         ).status,
+        404,
+      );
+      assert.equal(
+        (await fetch(`${base}/api/enterprise/objects?serviceSpaceId=${spaceB.id}`, {
+          headers: { cookie: sessionA.cookie },
+        })).status,
+        404,
+      );
+      assert.equal(
+        (await fetch(`${base}/api/enterprise/spaces?tenantId=${b.tenant.id}`, {
+          headers: { cookie: sessionA.cookie },
+        })).status,
         404,
       );
 
@@ -171,6 +196,43 @@ test(
         ),
         /Private A/,
       );
+
+      // A terminated native server is replaced without changing its Case workspace.
+      const firstBinding = runtimes.getBinding(caseA);
+      assert.ok(firstBinding);
+      await execFile("docker", ["rm", "-f", `zcode-enterprise-${caseA.id}`]);
+      const recovered = await fetch(`${base}/api/server-info`, {
+        headers: { cookie: sessionA.cookie },
+      });
+      assert.equal(recovered.status, 200);
+      assert.notEqual(runtimes.getBinding(caseA)?.token, firstBinding.token);
+
+      // A second workspace replaces the active route for this browser session.
+      assert.equal((await activate(caseA2.id, sessionA)).status, 200);
+      const switched = await fetch(`${base}/api/server-info`, {
+        headers: { cookie: sessionA.cookie },
+      });
+      assert.equal(switched.status, 200);
+      assert.match(JSON.stringify(await switched.json()), new RegExp(caseA2.id));
+      assert.equal((await activate(caseA.id, sessionA)).status, 200);
+
+      const status = async (next: string) => fetch(`${base}/api/enterprise/cases/${caseA.id}/status`, {
+        method: "PATCH",
+        headers: { cookie: sessionA.cookie, origin: base, "x-csrf-token": sessionA.csrf,
+          "content-type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      for (const next of ["in_progress", "resolved", "closed"]) {
+        assert.equal((await status(next)).status, 200);
+      }
+      assert.equal(runtimes.getBinding(caseA), null);
+      assert.equal((await activate(caseA.id, sessionA)).status, 400);
+      assert.equal((await status("in_progress")).status, 200);
+      assert.equal((await activate(caseA.id, sessionA)).status, 200);
+      assert.match(await readFile(join(caseA.workspacePath, "CASE_CONTEXT.md"), "utf8"), /Object A/);
+
+      store.removeMembership(a.user.id, a.tenant.id, store.findCredential("a-member@example.test")!.user.id);
+      assert.equal((await fetch(`${base}/api/server-info`, { headers: { cookie: memberA.cookie } })).status, 401);
     } finally {
       await gateway.close();
       store.close();
