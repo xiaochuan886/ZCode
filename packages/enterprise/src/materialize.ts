@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 export interface CaseWorkspaceInput {
   workspacePath: string;
@@ -193,7 +193,11 @@ async function prepareOnce(
   validateInput(input);
   await ensureRealDirectory(input.workspacePath);
   await ensureRealDirectory(join(input.workspacePath, ".zcode"));
-  const manifestPath = join(input.workspacePath, ".zcode", "enterprise-managed.json");
+  // 运行时可写 Case 工作区；把归属清单放在单 Case 挂载之外，避免伪造清单
+  // 将原生 Skill/MCP 标成托管项并在下次物化时删除。
+  const manifestRoot = join(dirname(input.workspacePath), ".enterprise-managed");
+  await ensureRealDirectory(manifestRoot);
+  const manifestPath = join(manifestRoot, `${basename(input.workspacePath)}.json`);
   const previous = await readManaged(manifestPath);
   const config = await readMcpConfig(join(input.workspacePath, ".zcode", "config.json"));
   const nextSkills = (input.sharedSkills ?? []).map((skill) => `${SKILL_PREFIX}${skill.id}`);

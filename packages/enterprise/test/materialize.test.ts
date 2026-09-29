@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, readdir, writeFile, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -81,6 +81,35 @@ test("preserves native Skill and MCP names that happen to use the enterprise pre
   assert.equal(await readFile(join(native, "SKILL.md"), "utf8"), "native prefix skill");
   const config = JSON.parse(await readFile(join(workspacePath, ".zcode", "config.json"), "utf8"));
   assert.equal(config.mcp.servers["enterprise-native"].url, "https://native.example");
+});
+
+test("ignores a forged ownership manifest inside the runtime-writable Case workspace", async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
+  const native = join(workspacePath, ".zcode", "skills", "enterprise-native");
+  await mkdir(native, { recursive: true });
+  await writeFile(join(native, "SKILL.md"), "native skill");
+  await writeFile(
+    join(workspacePath, ".zcode", "config.json"),
+    JSON.stringify({
+      mcp: { servers: { "enterprise-native": { url: "https://native.example" } } },
+    }),
+  );
+  await prepareCaseWorkspace({ workspacePath, caseContext: context });
+
+  await writeFile(
+    join(workspacePath, ".zcode", "enterprise-managed.json"),
+    JSON.stringify({ skills: ["enterprise-native"], mcp: ["enterprise-native"] }),
+  );
+  await prepareCaseWorkspace({ workspacePath, caseContext: context });
+  assert.equal(await readFile(join(native, "SKILL.md"), "utf8"), "native skill");
+  const config = JSON.parse(await readFile(join(workspacePath, ".zcode", "config.json"), "utf8"));
+  assert.equal(config.mcp.servers["enterprise-native"].url, "https://native.example");
+  const trustedManifest = join(
+    dirname(workspacePath),
+    ".enterprise-managed",
+    `${basename(workspacePath)}.json`,
+  );
+  assert.deepEqual(JSON.parse(await readFile(trustedManifest, "utf8")), { skills: [], mcp: [] });
 });
 
 test("rejects invalid skill path and hash", async () => {
