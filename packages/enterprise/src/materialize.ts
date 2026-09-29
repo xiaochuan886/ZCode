@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 export interface CaseWorkspaceInput {
@@ -49,6 +50,18 @@ async function ensureRealDirectory(path: string): Promise<void> {
   }
 }
 
+async function readRegularFile(path: string): Promise<string> {
+  const info = await lstat(path);
+  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Managed Case file must be regular");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    if (!(await handle.stat()).isFile()) throw new Error("Managed Case file must be regular");
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
 function validateInput(input: CaseWorkspaceInput): void {
   if (!isAbsolute(input.workspacePath)) throw new Error("Case workspace path must be absolute");
   for (const skill of input.sharedSkills ?? []) {
@@ -80,7 +93,7 @@ function caseContextMarkdown(input: CaseWorkspaceInput["caseContext"]): string {
 
 async function readManaged(path: string): Promise<ManagedNames> {
   try {
-    const value: unknown = JSON.parse(await readFile(path, "utf8"));
+    const value: unknown = JSON.parse(await readRegularFile(path));
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new Error("Invalid enterprise managed manifest");
     const record = value as Record<string, unknown>;
@@ -110,7 +123,7 @@ async function exists(path: string): Promise<boolean> {
 
 async function readMcpConfig(path: string): Promise<Record<string, unknown>> {
   try {
-    const value: unknown = JSON.parse(await readFile(path, "utf8"));
+    const value: unknown = JSON.parse(await readRegularFile(path));
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new Error("Workspace MCP config must be an object");
     return value as Record<string, unknown>;

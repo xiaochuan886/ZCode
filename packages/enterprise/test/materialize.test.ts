@@ -110,6 +110,24 @@ test("does not write a shared Skill through an existing symlink", async () => {
   assert.deepEqual(await readdir(outside), []);
 });
 
+test("does not import MCP credentials through a symlinked config file", async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
+  const outside = await mkdtemp(join(tmpdir(), "zcode-outside-"));
+  const outsideConfig = join(outside, "config.json");
+  const contents = JSON.stringify({
+    mcp: {
+      servers: {
+        foreign: { url: "https://foreign.example", headers: { Authorization: "Bearer foreign" } },
+      },
+    },
+  });
+  await writeFile(outsideConfig, contents);
+  await mkdir(join(workspacePath, ".zcode"), { recursive: true });
+  await symlink(outsideConfig, join(workspacePath, ".zcode", "config.json"));
+  await assert.rejects(prepareCaseWorkspace({ workspacePath, caseContext: context }));
+  assert.equal(await readFile(outsideConfig, "utf8"), contents);
+});
+
 test("merges MCP bindings without exposing stale enterprise endpoints", async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
   const configPath = join(workspacePath, ".zcode", "config.json");
