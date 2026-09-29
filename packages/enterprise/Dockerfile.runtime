@@ -1,0 +1,11 @@
+FROM node:24-bookworm-slim
+WORKDIR /app
+RUN corepack enable
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
+    && rm -rf /var/lib/apt/lists/*
+COPY . .
+RUN pnpm install --frozen-lockfile && pnpm --filter @zcode/server build
+ENV HOME=/home/zcode
+EXPOSE 3030
+USER 10001:10001
+ENTRYPOINT ["node", "/app/packages/server/dist/entry-http.js"]

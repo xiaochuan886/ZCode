@@ -4,6 +4,10 @@
 .worktree
 .vscode
 .agents
+.superpowers
+.enterprise-data
+**/.enterprise-data
+**/enterprise.sqlite*
 
 node_modules
 **/node_modules
