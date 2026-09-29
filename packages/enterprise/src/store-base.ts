@@ -163,6 +163,19 @@ export class EnterpriseStoreBase {
     this.run("INSERT INTO memberships VALUES(?,?,?)", tenantId, userId, role);
     return { tenantId, userId, role };
   }
+  provisionUser(
+    actorId: string,
+    tenantId: string,
+    input: { email: string; passwordHash: string; displayName?: string; role: Role },
+  ): { user: User; membership: Membership } {
+    return this.transaction(() => {
+      this.membership(actorId, tenantId, "admin");
+      if (this.findCredential(input.email)) fail("conflict");
+      const user = this.createUser(input.email, input.passwordHash, input.displayName);
+      const membership = this.addMembership(actorId, tenantId, user.id, input.role);
+      return { user, membership };
+    });
+  }
   removeMembership(actorId: string, tenantId: string, userId: string): void {
     this.transaction(() => {
       this.membership(actorId, tenantId, "admin");
@@ -186,6 +199,16 @@ export class EnterpriseStoreBase {
       space.createdAt,
     );
     return space;
+  }
+  updateServiceSpace(actorId: string, spaceId: string, input: { name: string }): ServiceSpace {
+    return this.transaction(() => {
+      const current = this.space(actorId, spaceId);
+      this.membership(actorId, current.tenantId, "admin");
+      const name = input.name.trim();
+      if (!name) fail("validation");
+      this.run("UPDATE service_spaces SET name=? WHERE id=?", name, spaceId);
+      return { ...current, name };
+    });
   }
   listServiceSpaces(actorId: string, tenantId: string): ServiceSpace[] {
     this.membership(actorId, tenantId);

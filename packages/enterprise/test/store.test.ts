@@ -12,6 +12,43 @@ test("tenant boundaries, immutable snapshots and case transitions", async () => 
     const a = store.bootstrapAdmin("Alpha", "a@example.test", "hash-a");
     const b = store.bootstrapAdmin("Beta", "b@example.test", "hash-b");
     const space = store.createServiceSpace(a.user.id, a.tenant.id, { name: "Support" });
+    const provisioned = store.provisionUser(a.user.id, a.tenant.id, {
+      email: "member@example.test",
+      passwordHash: "hash-member",
+      role: "member",
+    });
+    assert.equal(provisioned.membership.tenantId, a.tenant.id);
+    assert.throws(
+      () =>
+        store.provisionUser(a.user.id, a.tenant.id, {
+          email: "member@example.test",
+          passwordHash: "another-hash",
+          role: "member",
+        }),
+      /conflict/,
+    );
+    assert.throws(
+      () =>
+        store.provisionUser(b.user.id, a.tenant.id, {
+          email: "leak@example.test",
+          passwordHash: "hash",
+          role: "member",
+        }),
+      /not_found/,
+    );
+    assert.equal(store.findCredential("leak@example.test"), null);
+    assert.throws(
+      () => store.updateServiceSpace(b.user.id, space.id, { name: "Foreign" }),
+      /not_found/,
+    );
+    assert.throws(
+      () => store.updateServiceSpace(provisioned.user.id, space.id, { name: "Member" }),
+      /forbidden/,
+    );
+    assert.equal(
+      store.updateServiceSpace(a.user.id, space.id, { name: "Customer Support" }).name,
+      "Customer Support",
+    );
     const object = store.createServiceObject(a.user.id, space.id, {
       name: "Server",
       type: "machine",
