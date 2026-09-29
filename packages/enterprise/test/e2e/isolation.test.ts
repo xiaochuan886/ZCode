@@ -5,7 +5,7 @@ import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect, createServer as createTcpServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
@@ -263,6 +263,21 @@ test(
         relayConfig.url,
       ]);
       assert.equal(containerProbe.stdout.trim(), "401");
+      const managedManifestPath = join(
+        dirname(caseA.workspacePath),
+        ".enterprise-managed",
+        `${basename(caseA.workspacePath)}.json`,
+      );
+      assert.ok((await readFile(managedManifestPath, "utf8")).includes("skills"));
+      await assert.rejects(
+        execFile("docker", [
+          "exec",
+          `zcode-enterprise-${caseA.id}`,
+          "test",
+          "-e",
+          managedManifestPath,
+        ]),
+      );
       assert.match(
         await readFile(
           join(
