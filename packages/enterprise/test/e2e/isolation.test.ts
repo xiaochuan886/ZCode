@@ -104,11 +104,16 @@ test(
       content: "---\nname: private-a\ndescription: Tenant A only\n---\n# Private A\n",
     });
     const secret = randomBytes(24).toString("hex");
-    process.env.ZCODE_ENTERPRISE_MCP_SECRET_E2E_A = secret;
+    const secretRef = `ZCODE_ENTERPRISE_MCP_SECRET_${a.tenant.id.replaceAll("-", "").toUpperCase()}_E2E_A`;
+    const previousAllowlist = process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+    process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
+      [a.tenant.id]: ["https://knowledge-a.example.test"],
+    });
+    process.env[secretRef] = secret;
     store.createMcpBinding(a.user.id, a.tenant.id, {
       name: "knowledge-a",
       endpoint: "https://knowledge-a.example.test/mcp",
-      secretRef: "ZCODE_ENTERPRISE_MCP_SECRET_E2E_A",
+      secretRef,
     });
 
     const runtimes = new RuntimeManager(
@@ -336,7 +341,9 @@ test(
     } finally {
       await gateway.close();
       store.close();
-      delete process.env.ZCODE_ENTERPRISE_MCP_SECRET_E2E_A;
+      delete process.env[secretRef];
+      if (previousAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+      else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = previousAllowlist;
       await rm(root, { recursive: true, force: true });
     }
   },
