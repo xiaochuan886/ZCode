@@ -30,6 +30,8 @@ import {
 } from "./share/conversationShareRoute.js";
 import type { IPlatformService, RemoteTarget, ServerRemoteInfo } from "@zcode/shared";
 import { WEB_DEFAULT_THEME, resolveWebInitialTheme } from "./webThemeSeed.js";
+import { createEnterpriseClient } from "./enterprise/api.js";
+import { EnterpriseApp } from "./enterprise/EnterpriseApp.js";
 
 function resolveWebThemePreference(defaultTheme: Theme = WEB_DEFAULT_THEME): Theme {
   const saved = localStorage.getItem("zcode-theme");
@@ -431,6 +433,18 @@ async function bootstrapWebApp() {
 
   if (isConversationSharePath(window.location.pathname)) {
     await renderConversationSharePage();
+    return;
+  }
+
+  try {
+    const enterprise = await createEnterpriseClient().bootstrap();
+    if (enterprise) {
+      document.title = "ZCode - Enterprise";
+      root.render(<EnterpriseApp initial={enterprise} platform={createWebPlatform()} />);
+      return;
+    }
+  } catch (error) {
+    renderWebBootstrapError(error);
     return;
   }
 

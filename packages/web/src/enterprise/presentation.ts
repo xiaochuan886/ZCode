@@ -1,0 +1,56 @@
+export const zh = {
+  login: "登录",
+  email: "邮箱",
+  password: "密码",
+  tenant: "租户",
+  space: "服务空间",
+  object: "服务对象",
+  cases: "案例",
+  title: "标题",
+  category: "类别",
+  create: "创建",
+  newSpace: "新建服务空间",
+  newObject: "新建服务对象",
+  objectType: "对象类型",
+  newCase: "新建案例",
+  open: "打开",
+  logout: "退出",
+  retry: "重试",
+  noCase: "选择或创建案例后开始工作",
+  loading: "正在加载…",
+  status: "状态",
+  context: "案例上下文",
+  select: "请选择",
+  loginError: "登录失败",
+};
+export const en = {
+  login: "Sign in",
+  email: "Email",
+  password: "Password",
+  tenant: "Tenant",
+  space: "Service space",
+  object: "Service object",
+  cases: "Cases",
+  title: "Title",
+  category: "Category",
+  create: "Create",
+  newSpace: "New service space",
+  newObject: "New service object",
+  objectType: "Object type",
+  newCase: "New case",
+  open: "Open",
+  logout: "Sign out",
+  retry: "Retry",
+  noCase: "Select or create a case to begin",
+  loading: "Loading…",
+  status: "Status",
+  context: "Case context",
+  select: "Select",
+  loginError: "Sign in failed",
+};
+export const field =
+  "min-w-0 rounded-lg border border-input-border bg-input px-3 py-2 text-ui-base text-foreground focus:border-input-border-focused focus:bg-input-focused";
+export const button =
+  "rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover disabled:opacity-50";
+export const primary =
+  "rounded-lg bg-primary px-3 py-2 text-ui-base text-primary-foreground disabled:opacity-50";
