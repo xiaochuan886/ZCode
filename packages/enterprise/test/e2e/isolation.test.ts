@@ -94,7 +94,10 @@ test(
       name: "Object A2",
       type: "application",
     });
-    const caseA2 = store.createCase(a.user.id, objectA2.id, { title: "A second case", category: "support" });
+    const caseA2 = store.createCase(a.user.id, objectA2.id, {
+      title: "A second case",
+      category: "support",
+    });
     const caseB = store.createCase(b.user.id, objectB.id, { title: "B case", category: "support" });
     store.createSkill(a.user.id, caseA.id, {
       name: "Private A",
@@ -175,15 +178,19 @@ test(
         404,
       );
       assert.equal(
-        (await fetch(`${base}/api/enterprise/objects?serviceSpaceId=${spaceB.id}`, {
-          headers: { cookie: sessionA.cookie },
-        })).status,
+        (
+          await fetch(`${base}/api/enterprise/objects?serviceSpaceId=${spaceB.id}`, {
+            headers: { cookie: sessionA.cookie },
+          })
+        ).status,
         404,
       );
       assert.equal(
-        (await fetch(`${base}/api/enterprise/spaces?tenantId=${b.tenant.id}`, {
-          headers: { cookie: sessionA.cookie },
-        })).status,
+        (
+          await fetch(`${base}/api/enterprise/spaces?tenantId=${b.tenant.id}`, {
+            headers: { cookie: sessionA.cookie },
+          })
+        ).status,
         404,
       );
 
@@ -237,12 +244,16 @@ test(
       const configA = await readFile(join(caseA.workspacePath, ".zcode", "config.json"), "utf8");
       assert.ok(configA.includes("enterprise-knowledge-a"));
       assert.ok(!configA.includes(secret));
-      const relayConfig = (JSON.parse(configA) as { mcp: { servers: Record<string, { url: string }> } })
-        .mcp.servers["enterprise-knowledge-a"];
+      const relayConfig = (
+        JSON.parse(configA) as { mcp: { servers: Record<string, { url: string }> } }
+      ).mcp.servers["enterprise-knowledge-a"];
       assert.ok(relayConfig);
       assert.match(relayConfig.url, /^http:\/\/host\.docker\.internal:/);
       const containerProbe = await execFile("docker", [
-        "exec", `zcode-enterprise-${caseA.id}`, "node", "-e",
+        "exec",
+        `zcode-enterprise-${caseA.id}`,
+        "node",
+        "-e",
         "fetch(process.argv[1]).then(r => console.log(r.status)).catch(e => { console.error(e); process.exitCode = 1 })",
         relayConfig.url,
       ]);
@@ -290,12 +301,17 @@ test(
       assert.match(JSON.stringify(await switched.json()), new RegExp(caseA2.id));
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
 
-      const status = async (next: string) => fetch(`${base}/api/enterprise/cases/${caseA.id}/status`, {
-        method: "PATCH",
-        headers: { cookie: sessionA.cookie, origin: base, "x-csrf-token": sessionA.csrf,
-          "content-type": "application/json" },
-        body: JSON.stringify({ status: next }),
-      });
+      const status = async (next: string) =>
+        fetch(`${base}/api/enterprise/cases/${caseA.id}/status`, {
+          method: "PATCH",
+          headers: {
+            cookie: sessionA.cookie,
+            origin: base,
+            "x-csrf-token": sessionA.csrf,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ status: next }),
+        });
       for (const next of ["in_progress", "resolved", "closed"]) {
         assert.equal((await status(next)).status, 200);
       }
@@ -303,10 +319,20 @@ test(
       assert.equal((await activate(caseA.id, sessionA)).status, 400);
       assert.equal((await status("in_progress")).status, 200);
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
-      assert.match(await readFile(join(caseA.workspacePath, "CASE_CONTEXT.md"), "utf8"), /Object A/);
+      assert.match(
+        await readFile(join(caseA.workspacePath, "CASE_CONTEXT.md"), "utf8"),
+        /Object A/,
+      );
 
-      store.removeMembership(a.user.id, a.tenant.id, store.findCredential("a-member@example.test")!.user.id);
-      assert.equal((await fetch(`${base}/api/server-info`, { headers: { cookie: memberA.cookie } })).status, 401);
+      store.removeMembership(
+        a.user.id,
+        a.tenant.id,
+        store.findCredential("a-member@example.test")!.user.id,
+      );
+      assert.equal(
+        (await fetch(`${base}/api/server-info`, { headers: { cookie: memberA.cookie } })).status,
+        401,
+      );
     } finally {
       await gateway.close();
       store.close();

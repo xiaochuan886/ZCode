@@ -171,7 +171,9 @@ test("native ZCode loaders discover a materialized Skill and MCP binding", async
   await prepareCaseWorkspace({
     workspacePath,
     caseContext: context,
-    sharedSkills: [{ id: "support", name: "Support", content: "# Support\n\nInvestigate the Case.\n" }],
+    sharedSkills: [
+      { id: "support", name: "Support", content: "# Support\n\nInvestigate the Case.\n" },
+    ],
     mcpServers: { knowledge: { type: "http", url: "https://knowledge.example/mcp" } },
   });
 
