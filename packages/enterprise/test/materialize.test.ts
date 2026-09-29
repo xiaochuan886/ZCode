@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, writeFile, mkdir, symlink } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { prepareCaseWorkspace } from "../src/materialize.ts";
+import { prepareCaseWorkspace } from "../src/materialize.js";
 
 const context = {
   caseId: "case-a",
