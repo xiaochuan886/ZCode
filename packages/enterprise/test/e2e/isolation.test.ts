@@ -43,11 +43,11 @@ test(
       content: "---\nname: private-a\ndescription: Tenant A only\n---\n# Private A\n",
     });
     const secret = randomBytes(24).toString("hex");
-    process.env.ENTERPRISE_E2E_TOKEN_A = secret;
+    process.env.ZCODE_ENTERPRISE_MCP_SECRET_E2E_A = secret;
     store.createMcpBinding(a.user.id, a.tenant.id, {
       name: "knowledge-a",
       endpoint: "https://knowledge-a.example.test/mcp",
-      secretRef: "ENTERPRISE_E2E_TOKEN_A",
+      secretRef: "ZCODE_ENTERPRISE_MCP_SECRET_E2E_A",
     });
 
     const runtimes = new RuntimeManager(
@@ -155,6 +155,9 @@ test(
       const configB = await readFile(join(caseB.workspacePath, ".zcode", "config.json"), "utf8");
       assert.ok(!configB.includes("knowledge-a.example.test"));
       assert.ok(!configB.includes(secret));
+      const configA = await readFile(join(caseA.workspacePath, ".zcode", "config.json"), "utf8");
+      assert.ok(configA.includes("enterprise-knowledge-a"));
+      assert.ok(!configA.includes(secret));
       assert.match(
         await readFile(
           join(
@@ -171,7 +174,7 @@ test(
     } finally {
       await gateway.close();
       store.close();
-      delete process.env.ENTERPRISE_E2E_TOKEN_A;
+      delete process.env.ZCODE_ENTERPRISE_MCP_SECRET_E2E_A;
       await rm(root, { recursive: true, force: true });
     }
   },
