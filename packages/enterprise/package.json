@@ -1,0 +1,19 @@
+{
+  "name": "@zcode/enterprise",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "bootstrap-admin": "tsx src/bootstrap-admin.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsx": "^4.19.4",
+    "typescript": "^6.0.2"
+  }
+}

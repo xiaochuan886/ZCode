@@ -43,6 +43,12 @@ modules:
   - id: ui
     roots: [packages/ui/src]
     managed: false
+  - id: enterprise
+    roots: [packages/enterprise/src]
+    managed: true
+    requires: []
+    publicEntrypoints: [packages/enterprise/src/index.ts, packages/enterprise/src/contract.ts]
+    owner: enterprise-control-plane
   - id: web
     roots: [packages/web/src]
     managed: false
