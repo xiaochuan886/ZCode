@@ -3,7 +3,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { connect, type Socket } from "node:net";
+import { connect, createServer as createTcpServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -16,6 +16,14 @@ import { EnterpriseStore } from "../../src/store.js";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.RUN_ENTERPRISE_DOCKER_E2E === "1";
+
+async function availablePort(): Promise<number> {
+  const server = createTcpServer();
+  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
+  const address = server.address() as AddressInfo;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return address.port;
+}
 
 async function webSocketHandshake(
   port: number,
@@ -106,12 +114,15 @@ test(
         dataRoot: join(root, "runtime-data"),
       }),
     );
+    const gatewayPort = await availablePort();
     const gateway = createEnterpriseGateway({
       store,
       auth: new EnterpriseAuth(store),
       runtimes,
       staticRoot: root,
-      port: 0,
+      host: "0.0.0.0",
+      port: gatewayPort,
+      relayOrigin: `http://host.docker.internal:${gatewayPort}`,
     });
     await gateway.listen();
     const base = `http://127.0.0.1:${(gateway.server.address() as AddressInfo).port}`;
@@ -226,6 +237,16 @@ test(
       const configA = await readFile(join(caseA.workspacePath, ".zcode", "config.json"), "utf8");
       assert.ok(configA.includes("enterprise-knowledge-a"));
       assert.ok(!configA.includes(secret));
+      const relayConfig = (JSON.parse(configA) as { mcp: { servers: Record<string, { url: string }> } })
+        .mcp.servers["enterprise-knowledge-a"];
+      assert.ok(relayConfig);
+      assert.match(relayConfig.url, /^http:\/\/host\.docker\.internal:/);
+      const containerProbe = await execFile("docker", [
+        "exec", `zcode-enterprise-${caseA.id}`, "node", "-e",
+        "fetch(process.argv[1]).then(r => console.log(r.status)).catch(e => { console.error(e); process.exitCode = 1 })",
+        relayConfig.url,
+      ]);
+      assert.equal(containerProbe.stdout.trim(), "401");
       assert.match(
         await readFile(
           join(
