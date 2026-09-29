@@ -186,8 +186,6 @@ test(
       assert.equal(infoB.status, 200);
       assert.match(JSON.stringify(await infoA.json()), new RegExp(caseA.id));
       assert.match(JSON.stringify(await infoB.json()), new RegExp(caseB.id));
-      const activeSocket = await webSocketHandshake(port, base, sessionA.cookie);
-      assert.equal(activeSocket.status, 101);
 
       const bindingB = runtimes.getBinding(caseB);
       assert.ok(bindingB);
@@ -253,6 +251,8 @@ test(
       assert.notEqual(runtimes.getBinding(caseA)?.token, firstBinding.token);
 
       // A second workspace replaces the active route for this browser session.
+      const activeSocket = await webSocketHandshake(port, base, sessionA.cookie);
+      assert.equal(activeSocket.status, 101);
       const oldSocketClosed = once(activeSocket.socket, "close");
       assert.equal((await activate(caseA2.id, sessionA)).status, 200);
       await Promise.race([
