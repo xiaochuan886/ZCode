@@ -84,7 +84,7 @@ export function attachEnterpriseWebSocketHandler(input: {
       socket.on("close", () => {
         clearInterval(authorizationCheck);
         set?.delete(socket);
-        if (!set?.size) {
+        if (!set?.size && sockets.get(session.id) === set) {
           sockets.delete(session.id);
           socketUsers.delete(session.id);
         }

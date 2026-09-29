@@ -1,8 +1,35 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { Agent, buildConnector } from "undici";
+import { writeAsyncIterableBackpressured } from "./backpressure.js";
+import {
+  isTenantMcpEndpointAllowed,
+  isTenantMcpSecretRef,
+  resolvePublicMcpAddress,
+  type McpDnsLookup,
+  systemMcpDnsLookup,
+} from "./mcp-policy.js";
 import type { EnterpriseStore } from "./store.js";
 
 export type RelayCredential = { token: string; actorId: string };
+const maxConcurrentRelays = 32;
+const upstreamHeaderTimeoutMs = 15_000;
+const dnsResolveTimeoutMs = 5_000;
+
+export class McpRelayConcurrencyLimiter {
+  private active = 0;
+
+  acquire(): (() => void) | null {
+    if (this.active >= maxConcurrentRelays) return null;
+    this.active += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.active -= 1;
+    };
+  }
+}
 
 function send(response: ServerResponse, status: number, data: unknown): void {
   response.writeHead(status, {
@@ -30,6 +57,7 @@ async function proxyMcpRelay(
   endpoint: string,
   secret: string | undefined,
   fetchImpl: typeof fetch,
+  agent: Agent,
 ): Promise<void> {
   const blocked = new Set([
     "connection",
@@ -64,6 +92,7 @@ async function proxyMcpRelay(
   response.once("close", () => {
     if (!response.writableEnded) controller.abort();
   });
+  const headerTimeout = setTimeout(() => controller.abort(), upstreamHeaderTimeoutMs);
   try {
     const upstream = await fetchImpl(endpoint, {
       method,
@@ -72,8 +101,11 @@ async function proxyMcpRelay(
       duplex: body ? "half" : undefined,
       redirect: "manual",
       signal: controller.signal,
-    } as RequestInit);
+      dispatcher: agent,
+    } as RequestInit & { dispatcher: Agent });
+    clearTimeout(headerTimeout);
     if (upstream.status >= 300 && upstream.status < 400) {
+      await upstream.body?.cancel();
       send(response, 502, { error: "MCP redirects are not supported" });
       return;
     }
@@ -99,12 +131,63 @@ async function proxyMcpRelay(
       response.setHeader(key, value);
     }
     if (upstream.body) {
-      for await (const chunk of upstream.body) response.write(chunk);
+      const completed = await writeAsyncIterableBackpressured(
+        upstream.body,
+        response,
+        controller.signal,
+      );
+      if (!completed) {
+        if (!response.destroyed) response.destroy();
+        return;
+      }
     }
-    response.end();
+    if (!response.destroyed) response.end();
   } catch {
     if (!response.headersSent) send(response, 503, { error: "MCP service unavailable" });
     else response.destroy();
+  } finally {
+    clearTimeout(headerTimeout);
+  }
+}
+
+function pinnedAgent(endpoint: URL, address: { address: string; family: number }): Agent {
+  const connector = buildConnector({ timeout: upstreamHeaderTimeoutMs });
+  const pinnedConnector: buildConnector.connector = (options, callback) =>
+    connector(
+      {
+        ...options,
+        hostname: address.address,
+        host: address.address,
+        servername: endpoint.hostname,
+      },
+      callback,
+    );
+  return new Agent({
+    connect: pinnedConnector,
+    connections: 1,
+    pipelining: 0,
+    headersTimeout: upstreamHeaderTimeoutMs,
+    bodyTimeout: 0,
+  });
+}
+
+async function resolveWithTimeout(
+  hostname: string,
+  dnsLookup: McpDnsLookup,
+): Promise<{ address: string; family: number }> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      resolvePublicMcpAddress(hostname, dnsLookup),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("MCP DNS lookup timed out")),
+          dnsResolveTimeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -115,6 +198,8 @@ export async function handleMcpRelayRequest(
   store: EnterpriseStore,
   relayCredentials: Map<string, Map<string, RelayCredential>>,
   fetchImpl: typeof fetch = fetch,
+  dnsLookup: McpDnsLookup = systemMcpDnsLookup,
+  limiter = new McpRelayConcurrencyLimiter(),
 ): Promise<boolean> {
   const match = path.match(/^\/api\/enterprise\/mcp-relay\/([^/]+)\/([^/]+)$/);
   if (!match) return false;
@@ -123,8 +208,15 @@ export async function handleMcpRelayRequest(
     send(response, 405, { error: "Method not allowed" });
     return true;
   }
-  const caseId = decodeURIComponent(match[1]!);
-  const bindingId = decodeURIComponent(match[2]!);
+  let caseId: string;
+  let bindingId: string;
+  try {
+    caseId = decodeURIComponent(match[1]!);
+    bindingId = decodeURIComponent(match[2]!);
+  } catch {
+    send(response, 404, { error: "Not found" });
+    return true;
+  }
   const credential = relayCredentials.get(caseId)?.get(bindingId);
   const provided = bearerToken(request);
   if (!credential || !provided || !constantTimeTokenMatch(credential.token, provided)) {
@@ -143,6 +235,10 @@ export async function handleMcpRelayRequest(
     send(response, 404, { error: "Not found" });
     return true;
   }
+  if (binding.tenantId !== caseValue.tenantId) {
+    send(response, 404, { error: "Not found" });
+    return true;
+  }
   let endpoint: URL;
   try {
     endpoint = new URL(binding.endpoint);
@@ -150,13 +246,17 @@ export async function handleMcpRelayRequest(
     send(response, 503, { error: "MCP service unavailable" });
     return true;
   }
-  if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) {
+  if (
+    !isTenantMcpEndpointAllowed(caseValue.tenantId, endpoint.toString()) ||
+    endpoint.username ||
+    endpoint.password
+  ) {
     send(response, 503, { error: "MCP service unavailable" });
     return true;
   }
   let secret: string | undefined;
   if (binding.secretRef) {
-    if (!/^ZCODE_ENTERPRISE_MCP_SECRET_[A-Z0-9_]{1,100}$/.test(binding.secretRef)) {
+    if (!isTenantMcpSecretRef(binding.secretRef, caseValue.tenantId)) {
       process.emitWarning(`MCP binding ${binding.id} unavailable: secret reference is invalid.`, {
         code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",
       });
@@ -172,6 +272,22 @@ export async function handleMcpRelayRequest(
       return true;
     }
   }
-  await proxyMcpRelay(request, response, endpoint.toString(), secret, fetchImpl);
+  const release = limiter.acquire();
+  if (!release) {
+    send(response, 503, { error: "MCP relay capacity reached" });
+    return true;
+  }
+  let agent: Agent | null = null;
+  try {
+    const address = await resolveWithTimeout(endpoint.hostname, dnsLookup);
+    agent = pinnedAgent(endpoint, address);
+    await proxyMcpRelay(request, response, endpoint.toString(), secret, fetchImpl, agent);
+  } catch {
+    if (!response.headersSent) send(response, 503, { error: "MCP service unavailable" });
+    else response.destroy();
+  } finally {
+    release();
+    await agent?.destroy();
+  }
   return true;
 }

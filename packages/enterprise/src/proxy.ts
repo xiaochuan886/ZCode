@@ -1,5 +1,6 @@
 import { request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import { writeAsyncIterableBackpressured } from "./backpressure.js";
 import type { RuntimeBinding } from "./runtime.js";
 
 const deniedPaths = [
@@ -136,6 +137,14 @@ export async function proxyHttp(
 
   const method = request.method ?? "GET";
   const body = method === "GET" || method === "HEAD" ? undefined : request;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 120_000);
+  const abortRequest = () => controller.abort();
+  const abortResponse = () => {
+    if (!response.writableEnded) controller.abort();
+  };
+  request.once("aborted", abortRequest);
+  response.once("close", abortResponse);
   try {
     const upstream = await fetch(target, {
       method,
@@ -143,7 +152,7 @@ export async function proxyHttp(
       body,
       duplex: body ? "half" : undefined,
       redirect: "manual",
-      signal: AbortSignal.timeout(120_000),
+      signal: controller.signal,
     } as RequestInit);
     response.statusCode = upstream.status;
     for (const [key, value] of upstream.headers) {
@@ -157,9 +166,17 @@ export async function proxyHttp(
       response.setHeader(key, value);
     }
     if (upstream.body) {
-      for await (const chunk of upstream.body) response.write(chunk);
+      const completed = await writeAsyncIterableBackpressured(
+        upstream.body,
+        response,
+        controller.signal,
+      );
+      if (!completed) {
+        if (!response.destroyed) response.destroy();
+        return;
+      }
     }
-    response.end();
+    if (!response.destroyed) response.end();
   } catch {
     if (!response.headersSent) {
       response.writeHead(503, { "content-type": "application/json; charset=utf-8" });
@@ -167,6 +184,10 @@ export async function proxyHttp(
     } else {
       response.destroy();
     }
+  } finally {
+    clearTimeout(timeout);
+    request.off("aborted", abortRequest);
+    response.off("close", abortResponse);
   }
 }
 

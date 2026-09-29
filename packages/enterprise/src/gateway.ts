@@ -11,7 +11,13 @@ import { prepareCaseWorkspace } from "./materialize.js";
 import { handleEnterpriseApiRequest } from "./enterprise-api.js";
 import type { GatewayOptions } from "./gateway-types.js";
 import { attachEnterpriseWebSocketHandler } from "./gateway-websocket.js";
-import { handleMcpRelayRequest, type RelayCredential } from "./mcp-relay.js";
+import {
+  handleMcpRelayRequest,
+  McpRelayConcurrencyLimiter,
+  type RelayCredential,
+} from "./mcp-relay.js";
+import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
+import { cookies } from "./gateway-cookies.js";
 
 const mime: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -22,17 +28,6 @@ const mime: Record<string, string> = {
   ".ico": "image/x-icon",
   ".json": "application/json",
 };
-
-function cookies(request: IncomingMessage): Map<string, string> {
-  return new Map(
-    (request.headers.cookie ?? "").split(";").map((part) => {
-      const index = part.indexOf("=");
-      return index > 0
-        ? [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1).trim())]
-        : ["", ""];
-    }),
-  );
-}
 
 function send(response: ServerResponse, status: number, data: unknown): void {
   response.writeHead(status, {
@@ -113,9 +108,21 @@ async function prepare(
   const mcpServers: Record<string, Record<string, unknown>> = {};
   const caseCredentials = new Map<string, RelayCredential>();
   for (const binding of bindings) {
+    if (binding.tenantId !== value.tenantId) {
+      process.emitWarning(`MCP binding ${binding.id} skipped: tenant binding is invalid.`, {
+        code: "ZCODE_ENTERPRISE_MCP_TENANT_INVALID",
+      });
+      continue;
+    }
+    if (!isTenantMcpEndpointAllowed(value.tenantId, binding.endpoint)) {
+      process.emitWarning(`MCP binding ${binding.id} skipped: endpoint is not allowlisted.`, {
+        code: "ZCODE_ENTERPRISE_MCP_ENDPOINT_DENIED",
+      });
+      continue;
+    }
     let secret: string | undefined;
     if (binding.secretRef) {
-      if (!/^ZCODE_ENTERPRISE_MCP_SECRET_[A-Z0-9_]{1,100}$/.test(binding.secretRef)) {
+      if (!isTenantMcpSecretRef(binding.secretRef, value.tenantId)) {
         process.emitWarning(`MCP binding ${binding.id} skipped: secret reference is invalid.`, {
           code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",
         });
@@ -174,6 +181,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
   const sockets = new Map<string, Set<Duplex>>();
   const socketUsers = new Map<string, string>();
   const relayCredentials = new Map<string, Map<string, RelayCredential>>();
+  const relayLimiter = new McpRelayConcurrencyLimiter();
   const closeSockets = (sessionId: string) => {
     for (const socket of sockets.get(sessionId) ?? []) socket.destroy();
     sockets.delete(sessionId);
@@ -255,6 +263,8 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           options.store,
           relayCredentials,
           options.fetchImpl ?? fetch,
+          options.mcpDnsLookup,
+          relayLimiter,
         )
       )
         return;
@@ -376,8 +386,11 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     close: async () => {
       for (const id of sockets.keys()) closeSockets(id);
       relayCredentials.clear();
-      await options.runtimes.stopAll();
-      await new Promise<void>((done) => server.close(() => done()));
+      try {
+        await options.runtimes.stopAll();
+      } finally {
+        await new Promise<void>((done) => server.close(() => done()));
+      }
     },
   };
 }

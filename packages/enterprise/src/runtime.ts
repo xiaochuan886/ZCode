@@ -35,10 +35,13 @@ export interface RuntimeBinding {
 export class RuntimeManager {
   private readonly live = new Map<string, { binding: RuntimeBinding; handle: RuntimeHandle }>();
   private readonly pending = new Map<string, Promise<RuntimeBinding>>();
+  private shuttingDown = false;
+  private stoppingAll: Promise<void> | null = null;
 
   constructor(private readonly adapter: RuntimeAdapter) {}
 
   async ensure(caseInfo: RuntimeCase, hooks: RuntimeLifecycleHooks = {}): Promise<RuntimeBinding> {
+    if (this.shuttingDown) throw new Error("Runtime manager is shutting down");
     const pending = this.pending.get(caseInfo.id);
     if (pending) return pending;
     const operation = this.ensureOnce(caseInfo, hooks);
@@ -102,9 +105,22 @@ export class RuntimeManager {
     }
   }
 
-  async stopAll(): Promise<void> {
-    await Promise.all([...this.live.values()].map(({ handle }) => handle.stop()));
-    this.live.clear();
+  stopAll(): Promise<void> {
+    if (this.stoppingAll) return this.stoppingAll;
+    this.shuttingDown = true;
+    const pending = [...this.pending.values()];
+    this.stoppingAll = (async () => {
+      // 启动中的容器在 await adapter.start 后才进入 live；等待这些操作后统一停止。
+      await Promise.allSettled(pending);
+      const handles = [...this.live.values()].map(({ handle }) => handle);
+      this.live.clear();
+      const results = await Promise.allSettled(handles.map((handle) => handle.stop()));
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length) throw new AggregateError(errors, "Failed to stop all runtimes");
+    })();
+    return this.stoppingAll;
   }
 }
 

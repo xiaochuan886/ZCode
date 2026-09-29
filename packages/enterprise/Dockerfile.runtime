@@ -4,7 +4,8 @@ RUN corepack enable
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
-RUN pnpm install --frozen-lockfile && pnpm --filter @zcode/server build
+RUN pnpm install --frozen-lockfile && pnpm --filter @zcode/server build \
+    && pnpm --filter '@zcode/cli...' -r run build
 ENV HOME=/home/zcode
 EXPOSE 3030
 USER 10001:10001

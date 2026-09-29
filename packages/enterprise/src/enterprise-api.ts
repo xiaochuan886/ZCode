@@ -4,6 +4,7 @@ import { EnterpriseError } from "./types.js";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, relative, resolve, sep } from "node:path";
+import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
 
 export async function handleEnterpriseApiRequest(
   dependencies: EnterpriseApiRequest,
@@ -171,6 +172,8 @@ export async function handleEnterpriseApiRequest(
       await stopRuntime(value);
       await ensureRuntime(value, session.userId, relayOrigin(request, options));
       options.store.activateCase(session.id, value.id);
+      // 启动等待期间旧 Case 的并行握手仍可能通过检查；提交新绑定后再次关闭。
+      closeSockets(session.id);
       send(response, 200, publicCase(value));
       return;
     }
@@ -261,10 +264,10 @@ export async function handleEnterpriseApiRequest(
         : availableSpaces.map((space) => space.id);
       const affectedCases = runtimeCasesInSpaces(options.store, session.userId, affectedSpaces);
       const secretRef = body.secretRef == null ? null : str(body.secretRef);
-      if (secretRef && !/^ZCODE_ENTERPRISE_MCP_SECRET_[A-Z0-9_]{1,100}$/.test(secretRef))
+      if (secretRef && !isTenantMcpSecretRef(secretRef, tenantId))
         throw new EnterpriseError("validation");
       const endpoint = str(body.endpoint);
-      if (!endpoint.startsWith("https://")) throw new EnterpriseError("validation");
+      if (!isTenantMcpEndpointAllowed(tenantId, endpoint)) throw new EnterpriseError("validation");
       // 已运行的 Case 容器可能仍持有旧 MCP 凭据；修改绑定前先停止受影响的运行时。
       await Promise.all(affectedCases.map((affected) => stopRuntime(affected)));
       send(

@@ -107,3 +107,42 @@ test("native session binding accepts only a task indexed for that Case workspace
     false,
   );
 });
+
+test("stopAll waits for an in-flight start and rejects new runtime ensures", async () => {
+  let markStarted!: () => void;
+  let finishStart!: (handle: Awaited<ReturnType<RuntimeAdapter["start"]>>) => void;
+  const startWasCalled = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const deferredStart = new Promise<Awaited<ReturnType<RuntimeAdapter["start"]>>>((resolve) => {
+    finishStart = resolve;
+  });
+  let stopped = false;
+  const manager = new RuntimeManager({
+    async start() {
+      markStarted();
+      return deferredStart;
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  const caseInfo = { id: "case-pending", workspacePath: "/tmp/case-pending" };
+  const ensuring = manager.ensure(caseInfo);
+  await startWasCalled;
+  const stopping = manager.stopAll();
+  await assert.rejects(manager.ensure({ id: "case-new", workspacePath: "/tmp/case-new" }), {
+    message: "Runtime manager is shutting down",
+  });
+  finishStart({
+    id: "pending-handle",
+    url: "http://127.0.0.1:4400",
+    stop: async () => {
+      stopped = true;
+    },
+  });
+  await ensuring;
+  await stopping;
+  assert.equal(stopped, true);
+  assert.equal(manager.getBinding(caseInfo), null);
+});

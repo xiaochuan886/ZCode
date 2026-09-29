@@ -9,7 +9,7 @@ import { createConnection, type AddressInfo, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { nativePathAllowed, nativeTarget } from "../src/proxy.js";
 import { EnterpriseStore } from "../src/store.js";
@@ -520,13 +520,7 @@ test("session binding accepts only task IDs owned by the active Case runtime", a
 test("MCP relay streams through one Case binding without writing the upstream secret into the workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-mcp-"));
   await writeFile(join(dir, "index.html"), "ready");
-  const secretRef = "ZCODE_ENTERPRISE_MCP_SECRET_GATEWAY_TEST";
-  const missingSecretRef = "ZCODE_ENTERPRISE_MCP_SECRET_EXPECTED_MISSING";
-  const priorSecret = process.env[secretRef];
-  const priorMissingSecret = process.env[missingSecretRef];
   const secret = "never-write-this-real-secret";
-  process.env[secretRef] = secret;
-  delete process.env[missingSecretRef];
   let runtimeToken = "";
   let fetchCount = 0;
   let upstreamAuthorization: string | undefined;
@@ -557,6 +551,17 @@ test("MCP relay streams through one Case binding without writing the upstream se
   const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "cases"));
   const hash = await EnterpriseAuth.hashPassword(password);
   const { tenant, user } = store.bootstrapAdmin("Tenant", "admin@example.test", hash);
+  const prefix = `ZCODE_ENTERPRISE_MCP_SECRET_${tenant.id.replaceAll("-", "").toUpperCase()}_`;
+  const secretRef = `${prefix}GATEWAY_TEST`;
+  const missingSecretRef = `${prefix}EXPECTED_MISSING`;
+  const priorSecret = process.env[secretRef];
+  const priorMissingSecret = process.env[missingSecretRef];
+  const priorAllowlist = process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+  process.env[secretRef] = secret;
+  delete process.env[missingSecretRef];
+  process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
+    [tenant.id]: ["https://mcp.example.test", "https://optional.example.test"],
+  });
   const space = store.createServiceSpace(user.id, tenant.id, { name: "Support" });
   const object = store.createServiceObject(user.id, space.id, { name: "Widget", type: "product" });
   const value = store.createCase(user.id, object.id, { title: "Inspect widget" });
@@ -582,6 +587,7 @@ test("MCP relay streams through one Case binding without writing the upstream se
     staticRoot: dir,
     port: 0,
     fetchImpl,
+    mcpDnsLookup: async () => [{ address: "1.1.1.1", family: 4 }],
   });
   await gateway.listen();
   const address = gateway.server.address() as AddressInfo;
@@ -619,7 +625,14 @@ test("MCP relay streams through one Case binding without writing the upstream se
       readFile(configPath, "utf8"),
       readFile(join(value.workspacePath, "CASE_CONTEXT.md"), "utf8"),
       readFile(join(value.workspacePath, "AGENTS.md"), "utf8"),
-      readFile(join(value.workspacePath, ".zcode", "enterprise-managed.json"), "utf8"),
+      readFile(
+        join(
+          dirname(value.workspacePath),
+          ".enterprise-managed",
+          `${basename(value.workspacePath)}.json`,
+        ),
+        "utf8",
+      ),
     ]);
     assert.equal(files.join("\n").includes(secret), false);
     const relayPath = `/api/enterprise/mcp-relay/${value.id}/${binding.id}`;
@@ -661,6 +674,8 @@ test("MCP relay streams through one Case binding without writing the upstream se
     else process.env[secretRef] = priorSecret;
     if (priorMissingSecret === undefined) delete process.env[missingSecretRef];
     else process.env[missingSecretRef] = priorMissingSecret;
+    if (priorAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+    else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
     await gateway.close();
     store.close();
   }

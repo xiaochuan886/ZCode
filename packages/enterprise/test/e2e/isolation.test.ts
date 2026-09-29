@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { connect, createServer as createTcpServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -13,6 +13,7 @@ import { EnterpriseAuth } from "../../src/auth.js";
 import { createEnterpriseGateway } from "../../src/gateway.js";
 import { ContainerRuntimeAdapter, RuntimeManager } from "../../src/runtime.js";
 import { EnterpriseStore } from "../../src/store.js";
+import { smokeNativeSession } from "./native-session-smoke.js";
 
 const execFile = promisify(execFileCallback);
 const enabled = process.env.RUN_ENTERPRISE_DOCKER_E2E === "1";
@@ -99,6 +100,23 @@ test(
       category: "support",
     });
     const caseB = store.createCase(b.user.id, objectB.id, { title: "B case", category: "support" });
+    // The native session RPC requires a selectable model. This local test provider
+    // never receives a request because the smoke test only creates and resumes a session.
+    const providerConfigDir = join(root, "runtime-data", caseB.id, ".zcode", "v2");
+    await mkdir(providerConfigDir, { recursive: true });
+    await writeFile(
+      join(providerConfigDir, "config.json"),
+      JSON.stringify({
+        provider: {
+          "enterprise-e2e-local": {
+            name: "Enterprise E2E local",
+            kind: "openai-compatible",
+            options: { baseURL: "http://127.0.0.1:9/v1", apiKey: "test-only-key" },
+            models: { "e2e-no-inference": { limit: { context: 8192, output: 1024 } } },
+          },
+        },
+      }),
+    );
     store.createSkill(a.user.id, caseA.id, {
       name: "Private A",
       content: "---\nname: private-a\ndescription: Tenant A only\n---\n# Private A\n",
@@ -209,6 +227,25 @@ test(
       assert.equal(infoB.status, 200);
       assert.match(JSON.stringify(await infoA.json()), new RegExp(caseA.id));
       assert.match(JSON.stringify(await infoB.json()), new RegExp(caseB.id));
+      const nativeSessionId = await smokeNativeSession(base, sessionB.cookie, caseB.workspacePath);
+      const mappedSession = await fetch(`${base}/api/enterprise/cases/${caseB.id}/session`, {
+        method: "POST",
+        headers: {
+          cookie: sessionB.cookie,
+          origin: base,
+          "x-csrf-token": sessionB.csrf,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ sessionId: nativeSessionId }),
+      });
+      assert.equal(mappedSession.status, 200);
+      const restoredCase = await fetch(`${base}/api/enterprise/bootstrap`, {
+        headers: { cookie: sessionB.cookie },
+      });
+      assert.equal(
+        ((await restoredCase.json()) as { activeCase: { sessionId: string } }).activeCase.sessionId,
+        nativeSessionId,
+      );
 
       const bindingB = runtimes.getBinding(caseB);
       assert.ok(bindingB);

@@ -74,3 +74,11 @@
 - [ ] Exercise crash/restart, stale mapping, rapid Case switch, removed member, direct runtime request, missing sources, close/reopen.
 - [ ] Run all package tests, `pnpm typecheck`, `pnpm lint`, `pnpm architecture:check --changed`, and Web/server builds. Record every result and any environment limitation.
 - [ ] Broad review against issues #1–#9, resolve findings, then prepare a reviewable branch/PR.
+
+## Verification record (2026-09-30)
+
+The implemented branch provides the tenant domain and authentication, an opt-in enterprise Web shell and gateway, Case-specific Docker runtimes, context and native Skill materialization, and tenant-bound MCP relay. The native Docker image builds both the server and CLI agent. No ordinary Desktop or Web entry point requires enterprise mode.
+
+The enterprise package has 24 passing unit/integration tests. Its Docker E2E test passes with two tenants, multiple users/ServiceSpaces/Cases, runtime restart and Case switching, session ownership, native session create/resume and mode RPCs, Skill/MCP loader discovery, secret isolation, and closed/reopened Case behavior. The native session smoke uses a dummy local provider and sends no model inference requests. Plan is accepted by the native mode RPC, but the legacy session snapshot exposes the underlying permission mode rather than `planEnabled`; the E2E therefore verifies Build/Edit/Yolo snapshots and Plan command success. Model generation, browser interaction, tool execution, attachments and plugin/hooks remain outside the automated E2E evidence.
+
+`pnpm typecheck`, repository lint (zero errors), enterprise lint (zero warnings), `pnpm architecture:check --changed`, enterprise formatting, server/Web builds, and Docker image build pass. The repository-wide format check has existing failures in unrelated files; changed enterprise files pass formatting.

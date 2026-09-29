@@ -3,6 +3,7 @@ import type { EnterpriseAuth } from "./auth.js";
 import type { EnterpriseCase } from "./types.js";
 import type { RuntimeBinding, RuntimeManager } from "./runtime.js";
 import type { EnterpriseStore } from "./store.js";
+import type { McpDnsLookup } from "./mcp-policy.js";
 
 export type GatewayOptions = {
   store: EnterpriseStore;
@@ -14,6 +15,7 @@ export type GatewayOptions = {
   expectedOrigin?: string;
   relayOrigin?: string;
   fetchImpl?: typeof fetch;
+  mcpDnsLookup?: McpDnsLookup;
 };
 
 export type EnterpriseApiHelpers = {
