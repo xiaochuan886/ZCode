@@ -49,22 +49,45 @@ export class EnterpriseStoreBase {
   }
   protected migrate(): void {
     const version = Number(this.one("PRAGMA user_version")?.user_version ?? 0);
-    if (version > 1) fail("conflict");
-    if (version === 1) return;
-    this.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE memberships (tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('admin','member')), PRIMARY KEY (tenant_id,user_id));
-        CREATE TABLE service_spaces (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), name TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(tenant_id,name));
-        CREATE TABLE service_objects (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), name TEXT NOT NULL, type TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE cases (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), service_object_id TEXT NOT NULL REFERENCES service_objects(id), title TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','in_progress','resolved','closed')), workspace_path TEXT NOT NULL UNIQUE, object_snapshot TEXT NOT NULL, context_snapshot TEXT NOT NULL, native_session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-        CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, token_hash TEXT NOT NULL UNIQUE, csrf_hash TEXT NOT NULL, active_case_id TEXT REFERENCES cases(id), expires_at TEXT NOT NULL);
-        CREATE TABLE shared_skills (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT REFERENCES service_spaces(id), source_case_id TEXT NOT NULL REFERENCES cases(id), name TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL);
-        CREATE TABLE mcp_bindings (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT REFERENCES service_spaces(id), name TEXT NOT NULL, endpoint TEXT NOT NULL, secret_ref TEXT, created_at TEXT NOT NULL);
-        PRAGMA user_version = 1;
-      `);
-    });
+    if (version > 2) fail("conflict");
+    if (version === 0) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE tenants (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE memberships (tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, role TEXT NOT NULL CHECK(role IN ('admin','member')), PRIMARY KEY (tenant_id,user_id));
+          CREATE TABLE service_spaces (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), name TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(tenant_id,name));
+          CREATE TABLE service_objects (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), name TEXT NOT NULL, type TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+          CREATE TABLE cases (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), service_object_id TEXT NOT NULL REFERENCES service_objects(id), title TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('open','in_progress','resolved','closed')), workspace_path TEXT NOT NULL UNIQUE, object_snapshot TEXT NOT NULL, context_snapshot TEXT NOT NULL, native_session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+          CREATE TABLE sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, token_hash TEXT NOT NULL UNIQUE, csrf_hash TEXT NOT NULL, active_case_id TEXT REFERENCES cases(id), expires_at TEXT NOT NULL);
+          CREATE TABLE shared_skills (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT REFERENCES service_spaces(id), source_case_id TEXT NOT NULL REFERENCES cases(id), name TEXT NOT NULL, content TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+          CREATE TABLE mcp_bindings (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT REFERENCES service_spaces(id), name TEXT NOT NULL, endpoint TEXT NOT NULL, secret_ref TEXT, created_at TEXT NOT NULL);
+          PRAGMA user_version = 1;
+        `);
+      });
+    }
+    const migratedVersion = Number(this.one("PRAGMA user_version")?.user_version ?? 0);
+    if (migratedVersion === 1) {
+      this.transaction(() => {
+        this.db.exec(`
+          CREATE TABLE model_credentials (
+            tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+            provider_family TEXT NOT NULL,
+            key_version INTEGER NOT NULL,
+            ciphertext TEXT,
+            nonce TEXT,
+            auth_tag TEXT,
+            last_four TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            revoked_at TEXT,
+            PRIMARY KEY (tenant_id, provider_family),
+            CHECK ((revoked_at IS NULL AND ciphertext IS NOT NULL AND nonce IS NOT NULL AND auth_tag IS NOT NULL) OR revoked_at IS NOT NULL)
+          );
+          PRAGMA user_version = 2;
+        `);
+      });
+    }
   }
   protected membership(userId: string, tenantId: string, role?: Role): Membership {
     const row = this.one(

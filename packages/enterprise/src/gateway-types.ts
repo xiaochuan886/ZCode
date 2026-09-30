@@ -14,6 +14,7 @@ export type GatewayOptions = {
   port?: number;
   expectedOrigin?: string;
   relayOrigin?: string;
+  modelRuntimeDataRoot?: string;
   fetchImpl?: typeof fetch;
   mcpDnsLookup?: McpDnsLookup;
 };

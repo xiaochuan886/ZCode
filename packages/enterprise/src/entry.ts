@@ -3,6 +3,7 @@ import { EnterpriseStore } from "./store.js";
 import { EnterpriseAuth } from "./auth.js";
 import { ContainerRuntimeAdapter, ProcessRuntimeAdapter, RuntimeManager } from "./runtime.js";
 import { createEnterpriseGateway } from "./gateway.js";
+import { loadModelCredentialEncryptionKey } from "./model-key-file.js";
 
 const root = resolve(process.cwd());
 const dataRoot = resolve(process.env["ZCODE_ENTERPRISE_DATA_ROOT"] ?? "./.enterprise-data");
@@ -52,7 +53,9 @@ async function main() {
       );
     }
   }
-  const store = await EnterpriseStore.open(dbPath, workspaceRoot);
+  const store = await EnterpriseStore.open(dbPath, workspaceRoot, {
+    modelCredentialsEncryptionKey: await loadModelCredentialEncryptionKey(dataRoot),
+  });
   const adapter =
     mode === "container"
       ? new ContainerRuntimeAdapter({
@@ -74,6 +77,7 @@ async function main() {
     port: Number(process.env["ZCODE_ENTERPRISE_PORT"] ?? 3031),
     ...(expectedOrigin ? { expectedOrigin } : {}),
     ...(configuredRelayOrigin ? { relayOrigin: configuredRelayOrigin } : {}),
+    modelRuntimeDataRoot: `${dataRoot}/runtimes`,
   });
   await gateway.listen();
   const shutdown = async () => {

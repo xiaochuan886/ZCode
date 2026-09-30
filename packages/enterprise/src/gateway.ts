@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { readFile, stat } from "node:fs/promises";
@@ -7,7 +6,6 @@ import type { EnterpriseStore } from "./store.js";
 import { EnterpriseAuth } from "./auth.js";
 import { EnterpriseError, type EnterpriseCase, type EnterpriseSession } from "./types.js";
 import { nativePathAllowed, proxyHttp } from "./proxy.js";
-import { prepareCaseWorkspace } from "./materialize.js";
 import { handleEnterpriseApiRequest } from "./enterprise-api.js";
 import type { GatewayOptions } from "./gateway-types.js";
 import { attachEnterpriseWebSocketHandler } from "./gateway-websocket.js";
@@ -16,8 +14,10 @@ import {
   McpRelayConcurrencyLimiter,
   type RelayCredential,
 } from "./mcp-relay.js";
-import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
 import { cookies } from "./gateway-cookies.js";
+import { prepare } from "./gateway-prepare.js";
+import { type EnterpriseModelProvider, type ModelRelayCapability } from "./model-provision.js";
+import { handleModelRelayRequest, ModelRelayConcurrencyLimiter } from "./model-relay.js";
 
 const mime: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -96,79 +96,6 @@ function publicCase(value: EnterpriseCase) {
   };
 }
 
-async function prepare(
-  value: EnterpriseCase,
-  store: EnterpriseStore,
-  userId: string,
-  relayOrigin: string,
-  relayCredentials: Map<string, Map<string, RelayCredential>>,
-): Promise<void> {
-  const skills = store.listSkillsForCase(userId, value.id);
-  const bindings = store.listMcpBindingsForCase(userId, value.id);
-  const mcpServers: Record<string, Record<string, unknown>> = {};
-  const caseCredentials = new Map<string, RelayCredential>();
-  for (const binding of bindings) {
-    if (binding.tenantId !== value.tenantId) {
-      process.emitWarning(`MCP binding ${binding.id} skipped: tenant binding is invalid.`, {
-        code: "ZCODE_ENTERPRISE_MCP_TENANT_INVALID",
-      });
-      continue;
-    }
-    if (!isTenantMcpEndpointAllowed(value.tenantId, binding.endpoint)) {
-      process.emitWarning(`MCP binding ${binding.id} skipped: endpoint is not allowlisted.`, {
-        code: "ZCODE_ENTERPRISE_MCP_ENDPOINT_DENIED",
-      });
-      continue;
-    }
-    let secret: string | undefined;
-    if (binding.secretRef) {
-      if (!isTenantMcpSecretRef(binding.secretRef, value.tenantId)) {
-        process.emitWarning(`MCP binding ${binding.id} skipped: secret reference is invalid.`, {
-          code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",
-        });
-        continue;
-      }
-      secret = process.env[binding.secretRef];
-      if (!secret) {
-        process.emitWarning(
-          `MCP binding ${binding.id} skipped: configured secret is unavailable.`,
-          { code: "ZCODE_ENTERPRISE_MCP_SECRET_MISSING" },
-        );
-        continue;
-      }
-    }
-    const token = randomBytes(32).toString("base64url");
-    caseCredentials.set(binding.id, { token, actorId: userId });
-    const relayUrl = new URL(
-      `/api/enterprise/mcp-relay/${encodeURIComponent(value.id)}/${encodeURIComponent(binding.id)}`,
-      relayOrigin,
-    );
-    mcpServers[binding.name] = {
-      type: "http",
-      url: relayUrl.toString(),
-      headers: { Authorization: `Bearer ${token}` },
-    };
-  }
-  await prepareCaseWorkspace({
-    workspacePath: value.workspacePath,
-    caseContext: {
-      caseId: value.id,
-      title: value.title,
-      category: value.category,
-      serviceObject: value.objectSnapshot,
-      contextSnapshot: value.contextSnapshot,
-    },
-    sharedSkills: skills.map((skill) => ({
-      id: skill.id,
-      name: skill.name,
-      content: skill.content,
-      sha256: skill.contentHash,
-    })),
-    mcpServers,
-  });
-  relayCredentials.set(value.id, caseCredentials);
-}
-
 function runtimeCasesInSpaces(
   store: EnterpriseStore,
   actorId: string,
@@ -181,7 +108,12 @@ export function createEnterpriseGateway(options: GatewayOptions) {
   const sockets = new Map<string, Set<Duplex>>();
   const socketUsers = new Map<string, string>();
   const relayCredentials = new Map<string, Map<string, RelayCredential>>();
+  const modelRelayCapabilities = new Map<
+    string,
+    Map<EnterpriseModelProvider, ModelRelayCapability>
+  >();
   const relayLimiter = new McpRelayConcurrencyLimiter();
+  const modelRelayLimiter = new ModelRelayConcurrencyLimiter();
   const closeSockets = (sessionId: string) => {
     for (const socket of sockets.get(sessionId) ?? []) socket.destroy();
     sockets.delete(sessionId);
@@ -193,18 +125,34 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     }
   };
   const stopRuntime = (value: EnterpriseCase) =>
-    options.runtimes.stop(value, () => relayCredentials.delete(value.id));
+    options.runtimes.stop(value, () => {
+      relayCredentials.delete(value.id);
+      modelRelayCapabilities.delete(value.id);
+    });
   const ensureRuntime = async (value: EnterpriseCase, userId: string, requestOrigin: string) => {
     try {
       return await options.runtimes.ensure(value, {
-        beforeStop: () => relayCredentials.delete(value.id),
+        beforeStop: () => {
+          relayCredentials.delete(value.id);
+          modelRelayCapabilities.delete(value.id);
+        },
         beforeStart: async () => {
           relayCredentials.delete(value.id);
-          await prepare(value, options.store, userId, requestOrigin, relayCredentials);
+          modelRelayCapabilities.delete(value.id);
+          await prepare(
+            value,
+            options.store,
+            userId,
+            requestOrigin,
+            relayCredentials,
+            options.modelRuntimeDataRoot,
+            modelRelayCapabilities,
+          );
         },
       });
     } catch (error) {
       relayCredentials.delete(value.id);
+      modelRelayCapabilities.delete(value.id);
       throw error;
     }
   };
@@ -244,7 +192,10 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           return;
         }
         const user = options.store.getUser(session.userId);
-        const tenants = options.store.listTenantsForUser(session.userId);
+        const tenants = options.store.listTenantsForUser(session.userId).map((tenant) => ({
+          ...tenant,
+          role: options.store.getMembership(session.userId, tenant.id).role,
+        }));
         const activeCase = options.store.getActiveCase(session.id);
         send(response, 200, {
           enabled: true,
@@ -255,6 +206,34 @@ export function createEnterpriseGateway(options: GatewayOptions) {
         });
         return;
       }
+      if (
+        await handleModelRelayRequest(
+          path,
+          request,
+          response,
+          modelRelayCapabilities,
+          ({ caseId, actorId }) => {
+            try {
+              const value = options.store.getCase(actorId, caseId);
+              return value.status !== "closed";
+            } catch {
+              return false;
+            }
+          },
+          ({ caseId, actorId, providerFamily }) => {
+            try {
+              const value = options.store.getCase(actorId, caseId);
+              return options.store.getModelCredentialForGateway(value.tenantId, providerFamily)
+                .apiKey;
+            } catch {
+              return null;
+            }
+          },
+          options.fetchImpl ?? fetch,
+          modelRelayLimiter,
+        )
+      )
+        return;
       if (
         await handleMcpRelayRequest(
           path,
@@ -386,6 +365,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     close: async () => {
       for (const id of sockets.keys()) closeSockets(id);
       relayCredentials.clear();
+      modelRelayCapabilities.clear();
       try {
         await options.runtimes.stopAll();
       } finally {

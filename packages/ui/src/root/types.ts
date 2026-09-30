@@ -36,6 +36,8 @@ export interface RootProps {
   allowRemoteWorkspace?: boolean;
   /** 非桌面入口初始 workspace 注入前继续展示的 loading，桌面端不使用 */
   initialWorkspaceLoadingFallback?: ReactNode;
+  /** 企业控制面已经提供租户模型连接时，原生入口仅按可用模型判断。 */
+  enterpriseManagedModel?: boolean;
   /** Assistant code-comment 卡片灰度；默认关闭，关闭时保留原始 directive。 */
   assistantCodeCommentCardsEnabled?: boolean;
 }

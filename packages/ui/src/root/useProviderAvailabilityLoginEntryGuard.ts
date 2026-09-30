@@ -15,6 +15,7 @@ export function useProviderAvailabilityLoginEntryGuard({
   user,
   isRestoringOAuthSession,
   providerFamilyDomain,
+  ignoreProviderFamilyDomain = false,
   modelSelectionView,
   modelSelectionError,
   refreshProviderState,
@@ -25,6 +26,7 @@ export function useProviderAvailabilityLoginEntryGuard({
   user: UserInfo | null;
   isRestoringOAuthSession: boolean;
   providerFamilyDomain: string | null | undefined;
+  ignoreProviderFamilyDomain?: boolean;
   modelSelectionView: ModelSelectionView | null;
   modelSelectionError?: Error;
   refreshProviderState: () => Promise<void>;
@@ -54,7 +56,8 @@ export function useProviderAvailabilityLoginEntryGuard({
         : modelSelectionView;
       const availability = resolveProviderAvailabilityState({ modelSelectionView: refreshedView });
       const { hasUsableProvider, providerCount } = availability;
-      const shouldOpenLoginEntry = !providerFamilyDomain || (!user && !hasUsableProvider);
+      const shouldOpenLoginEntry =
+        (!ignoreProviderFamilyDomain && !providerFamilyDomain) || (!user && !hasUsableProvider);
 
       // 未登录且没有可用模型配置时必须引导用户连接账号或填写 API Key。
       // 启动检查、API Key 设置回流等入口统一走这里，避免各处复制判断后语义分叉。
@@ -78,6 +81,7 @@ export function useProviderAvailabilityLoginEntryGuard({
       enabled,
       modelSelectionView,
       providerFamilyDomain,
+      ignoreProviderFamilyDomain,
       refreshProviderState,
       readModelSelectionView,
       setLoginEntryOpen,

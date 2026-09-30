@@ -38,6 +38,7 @@ export function OccupationOnboarding({
   showChildrenWhileLoading = false,
   isMacDesktop,
   isWindowsDesktop,
+  disabled = false,
 }: {
   children: ReactNode;
   /** Windows/Linux 自绘窗控：引导全屏覆盖主界面（含标题栏），需在此补最小化/最大化/关闭。 */
@@ -46,6 +47,7 @@ export function OccupationOnboarding({
   showChildrenWhileLoading?: boolean;
   isMacDesktop?: boolean;
   isWindowsDesktop?: boolean;
+  disabled?: boolean;
 }) {
   const { settings, update } = useSettings();
   const platform = usePlatform();
@@ -211,6 +213,7 @@ export function OccupationOnboarding({
     applyLatestEntry();
     // eslint-disable-line react-hooks/exhaustive-deps
   }, [latestEntry]);
+  if (disabled) return <>{children}</>;
   if (!settings) return showChildrenWhileLoading ? <>{children}</> : null;
   // 判定进行中先不渲染，避免引导闪现后立即消失（判定为需引导）或先闪引导再进主界面。
   // 只有疑似首跑（settings 里也没有职业）才等待记录判定；存量用户（已有

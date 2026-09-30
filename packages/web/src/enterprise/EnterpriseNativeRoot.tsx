@@ -30,6 +30,7 @@ export function EnterpriseNativeRoot({
           platform={platform}
           initialWorkspaceAbsPath={activeCase.workspacePath}
           initialTaskId={activeCase.sessionId}
+          enterpriseManagedModel
           restoreSession={false}
           allowOpenWorkspace={false}
           preferDirectoryBrowser

@@ -11,17 +11,46 @@ import {
   type SharedSkill,
 } from "./types.js";
 import { EnterpriseStoreBase, type Row, now, id, json, parse, fail } from "./store-base.js";
+import {
+  ModelCredentialStore,
+  type ModelCredentialEncryptionKey,
+  type ModelCredentialStatus,
+} from "./model-credentials.js";
+
+export interface EnterpriseStoreOptions {
+  modelCredentialsEncryptionKey?: ModelCredentialEncryptionKey;
+}
 
 export class EnterpriseStore extends EnterpriseStoreBase {
-  private constructor(db: DatabaseSync, workspaceRoot: string) {
+  private readonly modelCredentials: ModelCredentialStore;
+
+  private constructor(
+    db: DatabaseSync,
+    workspaceRoot: string,
+    modelCredentialsEncryptionKey?: ModelCredentialEncryptionKey,
+  ) {
     super(db, workspaceRoot);
+    this.modelCredentials = new ModelCredentialStore(
+      db,
+      this.transaction.bind(this),
+      this.membership.bind(this),
+      modelCredentialsEncryptionKey,
+    );
   }
-  static async open(dbPath: string, workspaceRoot: string): Promise<EnterpriseStore> {
+  static async open(
+    dbPath: string,
+    workspaceRoot: string,
+    options: EnterpriseStoreOptions = {},
+  ): Promise<EnterpriseStore> {
     await mkdir(dirname(resolve(dbPath)), { recursive: true });
     await mkdir(workspaceRoot, { recursive: true });
     const db = new DatabaseSync(dbPath);
     db.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;");
-    const store = new EnterpriseStore(db, resolve(workspaceRoot));
+    const store = new EnterpriseStore(
+      db,
+      resolve(workspaceRoot),
+      options.modelCredentialsEncryptionKey,
+    );
     store.migrate();
     return store;
   }
@@ -318,5 +347,50 @@ export class EnterpriseStore extends EnterpriseStoreBase {
       secretRef: r.secret_ref == null ? null : String(r.secret_ref),
       createdAt: String(r.created_at),
     }));
+  }
+
+  upsertModelCredential(
+    actorId: string,
+    tenantId: string,
+    providerFamily: string,
+    apiKey: string,
+  ): ModelCredentialStatus {
+    return this.modelCredentials.upsertModelCredential(actorId, tenantId, providerFamily, apiKey);
+  }
+
+  rotateModelCredential(
+    actorId: string,
+    tenantId: string,
+    providerFamily: string,
+    apiKey: string,
+  ): ModelCredentialStatus {
+    return this.modelCredentials.rotateModelCredential(actorId, tenantId, providerFamily, apiKey);
+  }
+
+  revokeModelCredential(
+    actorId: string,
+    tenantId: string,
+    providerFamily: string,
+  ): ModelCredentialStatus {
+    return this.modelCredentials.revokeModelCredential(actorId, tenantId, providerFamily);
+  }
+
+  deleteModelCredential(
+    actorId: string,
+    tenantId: string,
+    providerFamily: string,
+  ): ModelCredentialStatus {
+    return this.modelCredentials.deleteModelCredential(actorId, tenantId, providerFamily);
+  }
+
+  listModelCredentialStatuses(actorId: string, tenantId: string): ModelCredentialStatus[] {
+    return this.modelCredentials.listModelCredentialStatuses(actorId, tenantId);
+  }
+
+  getModelCredentialForGateway(
+    tenantId: string,
+    providerFamily: string,
+  ): ReturnType<ModelCredentialStore["getModelCredentialForGateway"]> {
+    return this.modelCredentials.getModelCredentialForGateway(tenantId, providerFamily);
   }
 }

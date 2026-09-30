@@ -8,13 +8,13 @@ The existing implementation is in `packages/web/src/enterprise/EnterpriseApp.tsx
 
 ## Product model and labels
 
-| Concept | User meaning | Owner | Relationship |
-| --- | --- | --- | --- |
-| Tenant | Organization and access boundary | Enterprise control plane | Contains ServiceSpaces and model connection policy |
-| ServiceSpace | Business grouping, such as a client team | Enterprise control plane | Contains ServiceObjects and Cases; not a native ZCode workspace |
-| ServiceObject | Customer, product, asset or other subject | Enterprise control plane | A Case captures an immutable snapshot |
-| Case | A piece of work for a ServiceObject | Enterprise control plane | Owns one isolated native workspace directory and runtime |
-| Session | A conversation within a Case | Native ZCode | Many sessions per Case; draft becomes a session on first send |
+| Concept       | User meaning                              | Owner                    | Relationship                                                    |
+| ------------- | ----------------------------------------- | ------------------------ | --------------------------------------------------------------- |
+| Tenant        | Organization and access boundary          | Enterprise control plane | Contains ServiceSpaces and model connection policy              |
+| ServiceSpace  | Business grouping, such as a client team  | Enterprise control plane | Contains ServiceObjects and Cases; not a native ZCode workspace |
+| ServiceObject | Customer, product, asset or other subject | Enterprise control plane | A Case captures an immutable snapshot                           |
+| Case          | A piece of work for a ServiceObject       | Enterprise control plane | Owns one isolated native workspace directory and runtime        |
+| Session       | A conversation within a Case              | Native ZCode             | Many sessions per Case; draft becomes a session on first send   |
 
 The UI calls a Case a “案例” and explains once during creation that it opens an independent ZCode work area. It does not label ServiceSpace or ServiceObject as a ZCode workspace. “新建会话” retains ZCode's native meaning.
 
@@ -57,6 +57,8 @@ For the MVP, use one administrator-managed model connection per Tenant as the de
 
 The Case runtime must have a usable native provider configuration before `Root` mounts. Keep ZCode's provider availability guard intact: when the enterprise connection is ready, native `Root` should pass the guard and render the chat; when it is absent, the enterprise shell displays a clear “模型尚未配置” state with an admin setup action or member guidance. Do not show a second, per-Case ZCode account login as the expected enterprise entry path. Do not hide the guard or use the native “skip” action to imply that a model is usable.
 
+For the immediately testable local flow while the tenant connection is being built, the user chose to enter an API Key in the page. When native onboarding is needed, enterprise mode opens directly on the existing API Key form, with an explicit way back to other providers. The welcome surface must fit or scroll inside the available viewport; controls must be visible and clickable at a 560 × 900 browser viewport. This interim per-Case configuration is only a development bridge and does not satisfy the one-time tenant connection acceptance criterion; the UI must not describe it as the production tenant setup.
+
 Model setup is independent of enterprise user authentication. A member can browse authorized Cases while model setup is incomplete, but sending is unavailable and the reason is visible. Revoking the Tenant model connection invalidates all Case-scoped relay credentials. The exact provider implementation must be tested with native model selection and streaming before claiming this state is ready.
 
 ## State and event ownership
@@ -85,20 +87,32 @@ The gateway/store is authoritative for tenant membership, Case, active Case, rea
 
 ## Visible states and recovery
 
-| State | Visible result | Recovery |
-| --- | --- | --- |
-| No ServiceSpace | Home explains the grouping and offers creation if authorized | Create ServiceSpace |
-| No ServiceObject | Case dialog offers inline creation | Create Object, keep Case draft |
-| No Case | Home shows “新建案例” | Create Case |
-| Runtime starting | Transition view names the Case and shows startup progress | Wait; no duplicate create |
-| Model missing | Enterprise model setup state, no nested native welcome page | Admin configures provider; retry readiness |
-| Runtime failed | Specific error and retry on the same Case | Retry startup or return home |
-| Membership revoked | Unmount native Root immediately | Return to authorized tenant/home |
-| Case closed | Read-only Case details; native runtime remains stopped | Reopen if role and status permit, then restore sessions |
+| State              | Visible result                                               | Recovery                                                |
+| ------------------ | ------------------------------------------------------------ | ------------------------------------------------------- |
+| No ServiceSpace    | Home explains the grouping and offers creation if authorized | Create ServiceSpace                                     |
+| No ServiceObject   | Case dialog offers inline creation                           | Create Object, keep Case draft                          |
+| No Case            | Home shows “新建案例”                                        | Create Case                                             |
+| Runtime starting   | Transition view names the Case and shows startup progress    | Wait; no duplicate create                               |
+| Model missing      | Enterprise model setup state, no nested native welcome page  | Admin configures provider; retry readiness              |
+| Runtime failed     | Specific error and retry on the same Case                    | Retry startup or return home                            |
+| Membership revoked | Unmount native Root immediately                              | Return to authorized tenant/home                        |
+| Case closed        | Read-only Case details; native runtime remains stopped       | Reopen if role and status permit, then restore sessions |
 
 No state may leave a permanent generic “正在加载” screen. Every async transition has success, error and retry behavior.
 
 ## Implementation slices and acceptance
+
+### Web shell slice implemented in this change
+
+The enterprise web shell owns only enterprise navigation and transient creation state:
+
+- After sign-in, the default view is the Case home. It shows the selected Tenant and ServiceSpace, recent Cases, and one `新建案例` action.
+- Case creation is a single dialog. It selects a ServiceSpace, selects or creates a ServiceObject inline, accepts a Case title, and treats category as optional; an empty category is submitted as the store default `general`.
+- Opening a Case unmounts the home content and removes the business form column. A compact enterprise bar stays above the native Root and provides return, Case switching, Case creation, status, and user actions.
+- The native Root receives the remaining viewport. Its provider guard remains the owner of model setup. The enterprise home and Case bar expose a tenant model settings action; the shell never claims that a model is ready from browser state. The temporary native API Key form is a development bridge only.
+- The native Root host is scrollable at narrow widths, so the existing provider card and its `使用 API Key` action remain reachable on a 560px viewport. No enterprise form is rendered beside an open Case.
+
+The web shell state owner is `EnterpriseApp`: it owns only view mode, selected Tenant/ServiceSpace, the create dialog draft, and the active WebSocket binding. The gateway remains authoritative for Cases and active Case selection. The native Root remains authoritative for provider readiness, sessions, draft content, and chat. Switching or returning first tears down the old native binding; failed activation leaves the user in the home/transition state.
 
 1. **Model readiness:** add a tenant-owned provider connection and scoped model relay, provision native provider settings before Root mounts, and expose readiness/errors in bootstrap. Prove a new Case opens chat without per-Case account setup. This is the first blocking slice.
 2. **Navigation:** replace the permanent business sidebar with enterprise home, compact Case switcher and Case details drawer. Preserve current API ownership and Case isolation.

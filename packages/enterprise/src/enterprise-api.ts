@@ -5,6 +5,7 @@ import type { EnterpriseApiRequest } from "./gateway-types.js";
 import { readFile, realpath } from "node:fs/promises";
 import { basename, relative, resolve, sep } from "node:path";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
+import { normalizeProviderFamily } from "./model-credentials.js";
 
 export async function handleEnterpriseApiRequest(
   dependencies: EnterpriseApiRequest,
@@ -53,6 +54,34 @@ export async function handleEnterpriseApiRequest(
         200,
         options.store.listServiceSpaces(session.userId, str(url.searchParams.get("tenantId"))),
       );
+      return;
+    }
+    const modelList = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/model-credentials$/);
+    if (modelList && method === "GET") {
+      send(response, 200, options.store.listModelCredentialStatuses(session.userId, modelList[1]!));
+      return;
+    }
+    const modelCredential = path.match(
+      /^\/api\/enterprise\/tenants\/([^/]+)\/model-credentials\/([^/]+)$/,
+    );
+    if (modelCredential && (method === "PUT" || method === "DELETE")) {
+      const tenantId = modelCredential[1]!;
+      const providerFamily = normalizeProviderFamily(modelCredential[2]!);
+      if (options.store.getMembership(session.userId, tenantId).role !== "admin")
+        throw new EnterpriseError("forbidden");
+      const apiKey = method === "PUT" ? str((await jsonBody(request)).apiKey) : null;
+      const affectedSpaces = options.store.listServiceSpaces(session.userId, tenantId);
+      const affectedCases = runtimeCasesInSpaces(
+        options.store,
+        session.userId,
+        affectedSpaces.map((space) => space.id),
+      );
+      await Promise.all(affectedCases.map((affected) => stopRuntime(affected)));
+      const result =
+        method === "PUT"
+          ? options.store.upsertModelCredential(session.userId, tenantId, providerFamily, apiKey!)
+          : options.store.revokeModelCredential(session.userId, tenantId, providerFamily);
+      send(response, 200, result);
       return;
     }
     if (path === "/api/enterprise/spaces" && method === "POST") {

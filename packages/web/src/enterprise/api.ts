@@ -6,6 +6,15 @@ export interface EnterpriseUser {
 export interface Tenant {
   id: string;
   name: string;
+  role?: "admin" | "member";
+}
+export interface ModelCredentialStatus {
+  tenantId: string;
+  providerFamily: "zai-api" | "bigmodel-api";
+  status: "configured" | "revoked";
+  configured: boolean;
+  lastFour: string | null;
+  updatedAt: string;
 }
 export interface ServiceSpace {
   id: string;
@@ -160,6 +169,31 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
       post<EnterpriseCase>("/cases", { ...draft, contextSnapshot: {} }, token),
     activateCase: (id: string, token: string | null) =>
       post<void>(`/cases/${encodeURIComponent(id)}/activate`, {}, token),
+    modelCredentials: (tenantId: string) =>
+      request<ModelCredentialStatus[]>(
+        `/tenants/${encodeURIComponent(tenantId)}/model-credentials`,
+      ),
+    saveModelCredential: (
+      tenantId: string,
+      providerFamily: ModelCredentialStatus["providerFamily"],
+      apiKey: string,
+      token: string | null,
+    ) =>
+      request<ModelCredentialStatus>(
+        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/${providerFamily}`,
+        { method: "PUT", body: JSON.stringify({ apiKey }) },
+        token,
+      ),
+    revokeModelCredential: (
+      tenantId: string,
+      providerFamily: ModelCredentialStatus["providerFamily"],
+      token: string | null,
+    ) =>
+      request<ModelCredentialStatus>(
+        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/${providerFamily}`,
+        { method: "DELETE" },
+        token,
+      ),
     bindSession: (id: string, sessionId: string, token: string | null, signal?: AbortSignal) =>
       request<void>(
         `/cases/${encodeURIComponent(id)}/session`,

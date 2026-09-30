@@ -2,12 +2,16 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { connectViaWebSocket } from "@zcode/client";
 import type { IPlatformService } from "@zcode/shared";
-import { button, field, zh, en } from "./presentation.js";
+import { button, zh, en } from "./presentation.js";
 import { EnterpriseLogin } from "./EnterpriseLogin.js";
 import { EnterpriseCaseForm } from "./EnterpriseCaseForm.js";
-import { EnterpriseCaseHeader } from "./EnterpriseCaseHeader.js";
-import { EnterpriseNativeRoot, type NativeServices } from "./EnterpriseNativeRoot.js";
+import { EnterpriseCaseHome } from "./EnterpriseCaseHome.js";
+import { EnterpriseCaseWorkspace } from "./EnterpriseCaseWorkspace.js";
+import { EnterpriseModelSettings } from "./EnterpriseModelSettings.js";
+import { EnterpriseTopBar } from "./EnterpriseTopBar.js";
+import type { NativeServices } from "./EnterpriseNativeRoot.js";
 import { useEnterpriseAction } from "./useEnterpriseAction.js";
+import { useTenantModelStatus } from "./useTenantModelStatus.js";
 import {
   createEnterpriseClient,
   type CaseDraft,
@@ -18,11 +22,12 @@ import {
 } from "./api.js";
 
 const api = createEnterpriseClient();
+
 interface NativeBinding {
   caseId: string;
   services: NativeServices;
-  activeCase: EnterpriseCase;
 }
+
 export function EnterpriseApp({
   initial,
   platform,
@@ -37,19 +42,27 @@ export function EnterpriseApp({
   const [spaces, setSpaces] = useState<ServiceSpace[]>([]);
   const [objects, setObjects] = useState<ServiceObject[]>([]);
   const [cases, setCases] = useState<EnterpriseCase[]>([]);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [caseDialogOpen, setCaseDialogOpen] = useState(false);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [native, setNative] = useState<NativeBinding | null>(null);
   const [socket, setSocket] = useState<WebSocket | null>(null);
   const connectionGeneration = useRef(0);
   const { error, setError, busy, run } = useEnterpriseAction();
-  const [spaceName, setSpaceName] = useState("");
-  const [objectName, setObjectName] = useState("");
-  const [objectType, setObjectType] = useState("");
+  const {
+    modelReady,
+    modelStatusLoaded,
+    refresh: refreshModelStatus,
+  } = useTenantModelStatus(bootstrap.user?.id, tenantId, setError);
   const [draft, setDraft] = useState<CaseDraft>({
     serviceSpaceId: spaceId,
     serviceObjectId: "",
     title: "",
-    category: "",
+    category: "general",
   });
+
+  const activeCase = bootstrap.activeCase;
+  const tenantName = bootstrap.tenants.find((tenant) => tenant.id === tenantId)?.name ?? t.select;
 
   async function refresh() {
     const next = await api.bootstrap();
@@ -57,13 +70,15 @@ export function EnterpriseApp({
     setBootstrap(next);
     return next;
   }
+
   function disconnect() {
     connectionGeneration.current += 1;
     flushSync(() => setNative(null));
     socket?.close();
     setSocket(null);
   }
-  async function connect(activeCase: EnterpriseCase) {
+
+  async function connect(active: EnterpriseCase) {
     const generation = connectionGeneration.current;
     const wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
     const opened: { current: WebSocket | null } = { current: null };
@@ -77,8 +92,9 @@ export function EnterpriseApp({
       return;
     }
     setSocket(opened.current);
-    setNative({ caseId: activeCase.id, services, activeCase });
+    setNative({ caseId: active.id, services });
   }
+
   useEffect(() => {
     if (!bootstrap.user || !tenantId) {
       setSpaces([]);
@@ -87,8 +103,13 @@ export function EnterpriseApp({
     let stale = false;
     void api
       .spaces(tenantId)
-      .then((value) => {
-        if (!stale) setSpaces(value);
+      .then((next) => {
+        if (stale) return;
+        setSpaces(next);
+        setSpaceId((current) => {
+          if (current && next.some((space) => space.id === current)) return current;
+          return next[0]?.id ?? "";
+        });
       })
       .catch((cause: unknown) => {
         if (!stale) setError(String(cause));
@@ -96,7 +117,16 @@ export function EnterpriseApp({
     return () => {
       stale = true;
     };
-  }, [bootstrap.user, tenantId]);
+  }, [bootstrap.user?.id, tenantId, setError]);
+
+  useEffect(() => {
+    setDraft((current) =>
+      current.serviceSpaceId === spaceId
+        ? current
+        : { ...current, serviceSpaceId: spaceId, serviceObjectId: "" },
+    );
+  }, [spaceId]);
+
   useEffect(() => {
     if (!bootstrap.user || !spaceId) {
       setObjects([]);
@@ -106,10 +136,9 @@ export function EnterpriseApp({
     let stale = false;
     void Promise.all([api.objects(spaceId), api.cases(spaceId)])
       .then(([nextObjects, nextCases]) => {
-        if (!stale) {
-          setObjects(nextObjects);
-          setCases(nextCases);
-        }
+        if (stale) return;
+        setObjects(nextObjects);
+        setCases(nextCases);
       })
       .catch((cause: unknown) => {
         if (!stale) setError(String(cause));
@@ -117,77 +146,229 @@ export function EnterpriseApp({
     return () => {
       stale = true;
     };
-  }, [bootstrap.user, spaceId]);
+  }, [bootstrap.user?.id, spaceId, setError]);
+
   useEffect(() => {
-    const active = bootstrap.activeCase;
-    if (!bootstrap.user || !active || active.status === "closed" || native?.caseId === active.id)
+    const selectedCase = bootstrap.activeCase;
+    if (
+      !workspaceOpen ||
+      modelSettingsOpen ||
+      !modelReady ||
+      !bootstrap.user ||
+      !selectedCase ||
+      selectedCase.status === "closed" ||
+      native?.caseId === selectedCase.id
+    )
       return;
     let stale = false;
-    void connect(active).catch((cause: unknown) => {
+    void connect(selectedCase).catch((cause: unknown) => {
       if (!stale) setError(String(cause));
     });
     return () => {
       stale = true;
     };
-    // Connect only on authorized active Case changes; switching explicitly disconnects first.
-  }, [bootstrap.activeCase?.id, bootstrap.activeCase?.status, bootstrap.user]);
+    // 只有进入案例工作区后才连接 native Root；案例首页不会占用工作区 socket。
+  }, [
+    bootstrap.activeCase?.id,
+    bootstrap.activeCase?.status,
+    bootstrap.user?.id,
+    native?.caseId,
+    modelSettingsOpen,
+    modelReady,
+    setError,
+    workspaceOpen,
+  ]);
+
   useEffect(() => () => socket?.close(), [socket]);
 
-  const activeCase = bootstrap.activeCase;
+  function selectSpace(nextSpaceId: string) {
+    setSpaceId(nextSpaceId);
+    setDraft((current) => ({ ...current, serviceSpaceId: nextSpaceId, serviceObjectId: "" }));
+  }
+
+  function openNewCase() {
+    setModelSettingsOpen(false);
+    setDraft({
+      serviceSpaceId: spaceId,
+      serviceObjectId: "",
+      title: "",
+      category: "general",
+    });
+    setCaseDialogOpen(true);
+  }
+
+  function openCase(item: EnterpriseCase) {
+    void run(async () => {
+      setModelSettingsOpen(false);
+      if (activeCase?.id !== item.id) {
+        disconnect();
+        await api.activateCase(item.id, bootstrap.csrfToken);
+        await refresh();
+      }
+      setSpaceId(item.serviceSpaceId);
+      setCaseDialogOpen(false);
+      setWorkspaceOpen(true);
+    });
+  }
+
+  function returnHome() {
+    disconnect();
+    setCaseDialogOpen(false);
+    setModelSettingsOpen(false);
+    setWorkspaceOpen(false);
+  }
+
+  function openModelSettings() {
+    disconnect();
+    setModelSettingsOpen(true);
+  }
+
   function createCase(submittedDraft: CaseDraft) {
     void run(async () => {
-      const created = await api.createCase(submittedDraft, bootstrap.csrfToken);
-      setCases(await api.cases(spaceId));
-      setDraft({ serviceSpaceId: spaceId, serviceObjectId: "", title: "", category: "" });
+      const normalizedDraft = {
+        ...submittedDraft,
+        category: submittedDraft.category.trim() || "general",
+      };
+      const created = await api.createCase(normalizedDraft, bootstrap.csrfToken);
+      setSpaceId(normalizedDraft.serviceSpaceId);
+      setCases(await api.cases(normalizedDraft.serviceSpaceId));
+      setDraft({
+        serviceSpaceId: normalizedDraft.serviceSpaceId,
+        serviceObjectId: "",
+        title: "",
+        category: "general",
+      });
       disconnect();
       await api.activateCase(created.id, bootstrap.csrfToken);
       await refresh();
+      setCaseDialogOpen(false);
+      setWorkspaceOpen(true);
     });
   }
-  const caseForm = (
-    <EnterpriseCaseForm
-      t={t} spaceId={spaceId} objects={objects} draft={draft}
-      setDraft={setDraft} busy={busy}
-      onCreate={createCase}
+
+  async function createSpace(name: string) {
+    await run(async () => {
+      const created = await api.createSpace(tenantId, name, bootstrap.csrfToken);
+      setSpaces(await api.spaces(tenantId));
+      selectSpace(created.id);
+    });
+  }
+
+  async function createObject(name: string, type: string) {
+    await run(async () => {
+      const created = await api.createObject(spaceId, name, type, bootstrap.csrfToken);
+      setObjects(await api.objects(spaceId));
+      setDraft((current) => ({
+        ...current,
+        serviceSpaceId: spaceId,
+        serviceObjectId: created.id,
+      }));
+    });
+  }
+
+  function changeTenant(nextTenantId: string) {
+    setModelSettingsOpen(false);
+    setTenantId(nextTenantId);
+    setSpaceId("");
+    setSpaces([]);
+    setObjects([]);
+    setCases([]);
+    setDraft((current) => ({ ...current, serviceSpaceId: "", serviceObjectId: "" }));
+  }
+
+  const workspace =
+    workspaceOpen && activeCase ? (
+      <EnterpriseCaseWorkspace
+        activeCase={activeCase}
+        modelReady={modelReady}
+        modelStatusLoaded={modelStatusLoaded}
+        cases={cases}
+        t={t}
+        busy={busy}
+        native={native}
+        platform={platform}
+        csrfToken={bootstrap.csrfToken}
+        onError={setError}
+        onBack={returnHome}
+        onNewCase={openNewCase}
+        onOpenModelSettings={openModelSettings}
+        onSelectCase={(caseId) => {
+          const next = cases.find((item) => item.id === caseId);
+          if (next) openCase(next);
+        }}
+        onStatusChange={(status) =>
+          void run(async () => {
+            await api.updateCaseStatus(activeCase.id, status, bootstrap.csrfToken);
+            const next = await refresh();
+            if (status === "closed" || !next.activeCase) {
+              disconnect();
+              setWorkspaceOpen(false);
+            }
+          })
+        }
+      />
+    ) : (
+      <EnterpriseCaseHome
+        t={t}
+        tenantName={tenantName}
+        spaces={spaces}
+        spaceId={spaceId}
+        cases={cases}
+        activeCaseId={activeCase?.id}
+        busy={busy}
+        onSpaceChange={selectSpace}
+        onOpenCase={openCase}
+        onNewCase={openNewCase}
+        onOpenModelSettings={openModelSettings}
+      />
+    );
+
+  const selectedTenant = bootstrap.tenants.find((tenant) => tenant.id === tenantId);
+  const modelSettings = modelSettingsOpen ? (
+    <EnterpriseModelSettings
+      tenantId={tenantId}
+      tenantName={tenantName}
+      role={selectedTenant?.role ?? "member"}
+      csrfToken={bootstrap.csrfToken}
+      onBack={() => setModelSettingsOpen(false)}
+      onSaved={() => {
+        disconnect();
+        void refreshModelStatus();
+      }}
     />
-  );
+  ) : null;
+
   return (
     <div className="flex h-dvh min-h-dvh flex-col bg-background text-ui-base text-foreground">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-header px-4 py-2">
-        <strong className="text-ui-lg">ZCode</strong>
-        <span className="text-ui-caption text-foreground-subtle">Enterprise</span>
-        {bootstrap.user && (
-          <span className="ml-auto text-ui-caption text-foreground-subtle">
-            {bootstrap.user.displayName || bootstrap.user.email}
-          </span>
-        )}
-        {bootstrap.user && (
-          <button
-            className={button}
-            disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                disconnect();
-                await api.logout(bootstrap.csrfToken);
-                await refresh();
-              })
-            }
-          >
-            {t.logout}
-          </button>
-        )}
-      </header>
-      {error && (
+      <EnterpriseTopBar
+        t={t}
+        user={bootstrap.user}
+        tenants={bootstrap.tenants}
+        tenantId={tenantId}
+        busy={busy}
+        tenantLocked={workspaceOpen || modelSettingsOpen}
+        onTenantChange={changeTenant}
+        onLogout={() =>
+          void run(async () => {
+            disconnect();
+            setWorkspaceOpen(false);
+            setModelSettingsOpen(false);
+            await api.logout(bootstrap.csrfToken);
+            await refresh();
+          })
+        }
+      />
+      {error ? (
         <div
           role="alert"
-          className="flex items-center gap-3 border-b border-destructive bg-card px-4 py-2 text-ui-caption text-destructive"
+          className="flex shrink-0 items-center gap-3 border-b border-destructive bg-card px-3 py-2 text-ui-caption text-destructive sm:px-4"
         >
-          <span className="flex-1">{error}</span>
-          <button className={button} onClick={() => location.reload()}>
+          <span className="min-w-0 flex-1">{error}</span>
+          <button type="button" className={button} onClick={() => location.reload()}>
             {t.retry}
           </button>
         </div>
-      )}
+      ) : null}
       {!bootstrap.user ? (
         <EnterpriseLogin
           t={t}
@@ -201,204 +382,24 @@ export function EnterpriseApp({
           }
         />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="flex max-h-72 w-full shrink-0 flex-col gap-3 overflow-auto border-b border-border bg-sidebar p-3 md:max-h-none md:w-72 md:border-b-0 md:border-r">
-            <label className="flex flex-col gap-1 text-ui-caption">
-              {t.tenant}
-              <select
-                className={field}
-                value={tenantId}
-                onChange={(event) => {
-                  setTenantId(event.target.value);
-                  setSpaceId("");
-                  setObjects([]);
-                  setCases([]);
-                }}
-              >
-                <option value="">{t.select}</option>
-                {bootstrap.tenants.map((tenant) => (
-                  <option key={tenant.id} value={tenant.id}>
-                    {tenant.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-ui-caption">
-              {t.space}
-              <select
-                className={field}
-                value={spaceId}
-                onChange={(event) => {
-                  setSpaceId(event.target.value);
-                  setDraft((old) => ({
-                    ...old,
-                    serviceSpaceId: event.target.value,
-                    serviceObjectId: "",
-                  }));
-                }}
-              >
-                <option value="">{t.select}</option>
-                {spaces.map((space) => (
-                  <option key={space.id} value={space.id}>
-                    {space.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {tenantId && (
-              <form
-                className="flex gap-1"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void run(async () => {
-                    const created = await api.createSpace(
-                      tenantId,
-                      spaceName.trim(),
-                      bootstrap.csrfToken,
-                    );
-                    setSpaces(await api.spaces(tenantId));
-                    setSpaceId(created.id);
-                    setSpaceName("");
-                  });
-                }}
-              >
-                <input
-                  aria-label={t.newSpace}
-                  className={`${field} flex-1`}
-                  required
-                  value={spaceName}
-                  onChange={(event) => setSpaceName(event.target.value)}
-                  placeholder={t.newSpace}
-                />
-                <button className={button} disabled={busy}>
-                  {t.create}
-                </button>
-              </form>
-            )}
-            {spaceId && (
-              <>
-                <div className="border-t border-border pt-2 text-ui-caption font-medium">
-                  {t.object}
-                </div>
-                <div className="max-h-28 overflow-auto text-ui-caption">
-                  {objects.map((object) => (
-                    <div key={object.id} className="py-1">
-                      {object.name} · {object.type}
-                    </div>
-                  ))}
-                </div>
-                <form
-                  className="flex flex-col gap-1"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void run(async () => {
-                      const created = await api.createObject(
-                        spaceId,
-                        objectName.trim(),
-                        objectType.trim(),
-                        bootstrap.csrfToken,
-                      );
-                      setObjects(await api.objects(spaceId));
-                      setDraft((current) => ({
-                        ...current,
-                        serviceSpaceId: spaceId,
-                        serviceObjectId: created.id,
-                      }));
-                      setObjectName("");
-                      setObjectType("");
-                    });
-                  }}
-                >
-                  <input
-                    aria-label={t.newObject}
-                    className={field}
-                    required
-                    value={objectName}
-                    onChange={(event) => setObjectName(event.target.value)}
-                    placeholder={t.newObject}
-                  />
-                  <input
-                    aria-label={t.objectType}
-                    className={field}
-                    required
-                    value={objectType}
-                    onChange={(event) => setObjectType(event.target.value)}
-                    placeholder={t.objectType}
-                  />
-                  <button className={button} disabled={busy}>
-                    {t.create}
-                  </button>
-                </form>
-                <div className="border-t border-border pt-2 text-ui-caption font-medium">
-                  {t.cases}
-                </div>
-                <div className="flex flex-col gap-1">
-                  {cases.map((item) => (
-                    <button
-                      key={item.id}
-                      className={`${button} text-left ${activeCase?.id === item.id ? "bg-selected" : ""}`}
-                      disabled={busy}
-                      onClick={() =>
-                        activeCase?.id === item.id
-                          ? undefined
-                          : void run(async () => {
-                              disconnect();
-                              await api.activateCase(item.id, bootstrap.csrfToken);
-                              await refresh();
-                            })
-                      }
-                    >
-                      {item.title}
-                      <span className="block text-ui-sm text-foreground-subtle">
-                        {item.serviceObject.name} · {item.status}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </aside>
-          <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {activeCase ? (
-              <>
-                <EnterpriseCaseHeader
-                  activeCase={activeCase}
-                  t={t}
-                  busy={busy}
-                  onStatusChange={(status) =>
-                    void run(async () => {
-                      await api.updateCaseStatus(activeCase.id, status, bootstrap.csrfToken);
-                      const next = await refresh();
-                      setCases(await api.cases(activeCase.serviceSpaceId));
-                      if (status === "closed" || !next.activeCase) disconnect();
-                    })
-                  }
-                />
-                <div className="min-h-0 flex-1">
-                  {native?.caseId === activeCase.id && activeCase.status !== "closed" ? (
-                    <EnterpriseNativeRoot
-                      activeCase={activeCase}
-                      services={native.services}
-                      platform={platform}
-                      csrfToken={bootstrap.csrfToken}
-                      onError={setError}
-                    />
-                  ) : (
-                    <div className="p-5 text-ui-base text-foreground-subtle">{t.loading}</div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="mx-auto flex w-full max-w-lg flex-col gap-4 p-4">
-                <h1 className="text-ui-lg">{t.noCase}</h1>
-                <p className="text-ui-sm text-foreground-subtle">{t.caseHint}</p>
-                {caseForm}
-              </div>
-            )}
-            {activeCase && caseForm}
-          </main>
-        </div>
+        (modelSettings ?? workspace)
       )}
+      {bootstrap.user && caseDialogOpen ? (
+        <EnterpriseCaseForm
+          t={t}
+          spaces={spaces}
+          spaceId={spaceId}
+          objects={objects}
+          draft={draft}
+          setDraft={setDraft}
+          busy={busy}
+          onSpaceChange={selectSpace}
+          onCreateSpace={createSpace}
+          onCreateObject={createObject}
+          onCreate={createCase}
+          onCancel={() => setCaseDialogOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

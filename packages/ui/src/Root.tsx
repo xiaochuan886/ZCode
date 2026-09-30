@@ -149,6 +149,7 @@ function RootInner({
   initialWorkspaceIdentity,
   initialWorkspacePurpose,
   initialTaskId,
+  enterpriseManagedModel = false,
   isDesktop,
   isMacDesktop,
   isWindowsDesktop,
@@ -436,6 +437,7 @@ function RootInner({
       user,
       isRestoringOAuthSession: isResolvingStartupAuthState || providerStartupSyncPending,
       providerFamilyDomain: appSettings?.providerFamilyDomain,
+      ignoreProviderFamilyDomain: enterpriseManagedModel,
       modelSelectionView: rootModelSelectionView,
       modelSelectionError:
         rootModelSelectionRead.state.status === "error"
@@ -1013,6 +1015,7 @@ function RootInner({
       {remoteConnectionDialog}
       {directoryBrowserDialog}
       <OccupationOnboarding
+        disabled={enterpriseManagedModel}
         showWindowControls={Boolean(isWindowsDesktop || (isDesktop && !isMacDesktop))}
         showChildrenWhileLoading={!workspaceShellPath && isSettingsTabActive}
         isMacDesktop={isMacDesktop}
@@ -1072,17 +1075,19 @@ function RootInner({
             supportsEmbeddedBrowser={supportsEmbeddedBrowser}
           />
         )}
-        <ScopedErrorBoundary
-          scope="onboarding-dialog"
-          resetKeys={[workspaceShellIdentity?.trim() || workspaceShellPath]}
-          variant="silent"
-        >
-          <OnboardingDialog
-            workspacePath={workspaceShellPath || undefined}
-            workspaceIdentity={workspaceShellIdentity}
-            isDesktop={isDesktop}
-          />
-        </ScopedErrorBoundary>
+        {!enterpriseManagedModel && (
+          <ScopedErrorBoundary
+            scope="onboarding-dialog"
+            resetKeys={[workspaceShellIdentity?.trim() || workspaceShellPath]}
+            variant="silent"
+          >
+            <OnboardingDialog
+              workspacePath={workspaceShellPath || undefined}
+              workspaceIdentity={workspaceShellIdentity}
+              isDesktop={isDesktop}
+            />
+          </ScopedErrorBoundary>
+        )}
       </OccupationOnboarding>
     </RootShell>
   );
