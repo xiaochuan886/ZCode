@@ -106,6 +106,24 @@ async function testProviderConnection(
 }
 
 /** 租户目录 API:模型供应商目录、系统连接器与个人 Skill 导入。 */
+
+/** 个人 Skill 导入的工作区清单只覆盖该成员可见的客户(allowlist)。 */
+function visibleWorkspaces(
+  store: EnterpriseApiRequest["options"]["store"],
+  actorId: string,
+  tenantId: string,
+): Array<{ id: string; name: string; workspacePath: string }> {
+  const visible = new Set(store.visibleCustomerIdsFor(actorId, tenantId));
+  return store
+    .listCustomers(actorId, tenantId)
+    .filter((customer) => visible.has(customer.id))
+    .map((customer) => ({
+      id: customer.id,
+      name: customer.name,
+      workspacePath: customer.workspacePath,
+    }));
+}
+
 export async function handleTenantCatalogApiRequest(
   dependencies: EnterpriseApiRequest,
   session: EnterpriseSession,
@@ -200,8 +218,7 @@ export async function handleTenantCatalogApiRequest(
     const url = str(body.url);
     if (!isTenantMcpEndpointAllowed(tenantId, url)) throw new EnterpriseError("validation");
     const authMode = body.authMode === undefined ? "shared" : text(body.authMode);
-    if (authMode !== "shared" && authMode !== "user-oauth")
-      throw new EnterpriseError("validation");
+    if (authMode !== "shared" && authMode !== "user-oauth") throw new EnterpriseError("validation");
     const secretEnv = body.secretEnv === undefined ? undefined : text(body.secretEnv);
     if (authMode === "shared") {
       // shared 模式仍要求租户前缀 secret 引用;user-oauth 模式由 store 侧拒绝 secretEnv。
@@ -219,9 +236,7 @@ export async function handleTenantCatalogApiRequest(
       ...(body.authorizeUrl === undefined ? {} : { authorizeUrl: optionalText(body.authorizeUrl) }),
       ...(body.tokenUrl === undefined ? {} : { tokenUrl: optionalText(body.tokenUrl) }),
       ...(body.clientId === undefined ? {} : { clientId: optionalText(body.clientId) }),
-      ...(body.clientSecret === undefined
-        ? {}
-        : { clientSecret: optionalText(body.clientSecret) }),
+      ...(body.clientSecret === undefined ? {} : { clientSecret: optionalText(body.clientSecret) }),
       ...(body.scopes === undefined ? {} : { scopes: optionalText(body.scopes) }),
     };
     await stopTenantRuntimes(tenantId);
@@ -255,9 +270,7 @@ export async function handleTenantCatalogApiRequest(
       ...(body.authorizeUrl === undefined ? {} : { authorizeUrl: optionalText(body.authorizeUrl) }),
       ...(body.tokenUrl === undefined ? {} : { tokenUrl: optionalText(body.tokenUrl) }),
       ...(body.clientId === undefined ? {} : { clientId: optionalText(body.clientId) }),
-      ...(body.clientSecret === undefined
-        ? {}
-        : { clientSecret: optionalText(body.clientSecret) }),
+      ...(body.clientSecret === undefined ? {} : { clientSecret: optionalText(body.clientSecret) }),
       ...(body.scopes === undefined ? {} : { scopes: optionalText(body.scopes) }),
     };
     await stopTenantRuntimes(current.tenantId);
@@ -291,11 +304,7 @@ export async function handleTenantCatalogApiRequest(
             options.modelRuntimeDataRoot,
             expertRuntimeId(session.userId, tenantId),
           ),
-          workspaces: options.store.listCustomers(session.userId, tenantId).map((customer) => ({
-            id: customer.id,
-            name: customer.name,
-            workspacePath: customer.workspacePath,
-          })),
+          workspaces: visibleWorkspaces(options.store, session.userId, tenantId),
           importedNames,
           maxBytes: maxPersonalSkillBytes,
         })
@@ -314,11 +323,7 @@ export async function handleTenantCatalogApiRequest(
       throw new EnterpriseError("validation");
     if (!options.modelRuntimeDataRoot)
       throw new Error("Expert runtime data root is not configured");
-    const workspaces = options.store.listCustomers(session.userId, tenantId).map((customer) => ({
-      id: customer.id,
-      name: customer.name,
-      workspacePath: customer.workspacePath,
-    }));
+    const workspaces = visibleWorkspaces(options.store, session.userId, tenantId);
     // 原生 skill-creator 默认把新 Skill 建在项目级(客户 workspace),因此导入
     // 必须覆盖 HOME 与工作区两个来源,`.zcode/skills` 优先与原生发现一致。
     const content = await readImportableSkill({

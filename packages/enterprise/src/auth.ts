@@ -27,6 +27,8 @@ export class EnterpriseAuth {
     const credential = this.store.findCredential(email);
     if (
       !credential ||
+      // 禁用用户与错误密码走同一个 invalid_credentials 路径,不泄露具体失败原因。
+      credential.user.status === "disabled" ||
       !(await EnterpriseAuth.verifyPassword(password, credential.passwordHash)) ||
       this.store.listTenantsForUser(credential.user.id).length === 0
     )

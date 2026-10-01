@@ -1,15 +1,14 @@
-import { EnterpriseAuth } from "./auth.js";
 import { EnterpriseError } from "./types.js";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import { handleCustomerApiRequest } from "./customer-api.js";
 import { handleConnectorOauthApiRequest } from "./connector-oauth-api.js";
 import { handleTenantCatalogApiRequest } from "./tenant-catalog-api.js";
+import { handleUserApiRequest } from "./user-api.js";
 
 export async function handleEnterpriseApiRequest(
   dependencies: EnterpriseApiRequest,
 ): Promise<void> {
-  const { options, request, response, path, method, closeSockets, closeUserSockets, stopRuntime } =
-    dependencies;
+  const { options, request, response, path, method, closeSockets, stopRuntime } = dependencies;
   const { cookies, send, jsonBody, str, origin, runtimeTargetsForTenant } = dependencies.helpers;
   if (path.startsWith("/api/enterprise/")) {
     const token = cookies(request).get("enterprise_session");
@@ -38,6 +37,7 @@ export async function handleEnterpriseApiRequest(
     if (await handleCustomerApiRequest(dependencies, session)) return;
     if (await handleConnectorOauthApiRequest(dependencies, session)) return;
     if (await handleTenantCatalogApiRequest(dependencies, session)) return;
+    if (await handleUserApiRequest(dependencies, session)) return;
     const tenantSkills = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/skills$/);
     if (tenantSkills && method === "GET") {
       send(response, 200, {
@@ -71,39 +71,6 @@ export async function handleEnterpriseApiRequest(
       const affectedTargets = runtimeTargetsForTenant(options.store, session.userId, tenantId);
       await Promise.all(affectedTargets.map((affected) => stopRuntime(affected)));
       options.store.deleteTenantSkill(session.userId, tenantId, tenantSkillItem[2]!);
-      send(response, 200, { ok: true });
-      return;
-    }
-    if (path === "/api/enterprise/users" && method === "POST") {
-      const body = await jsonBody(request);
-      const role = str(body.role);
-      if (role !== "admin" && role !== "member") throw new EnterpriseError("validation");
-      const tenantId = str(body.tenantId);
-      if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-        throw new EnterpriseError("forbidden");
-      const passwordHash = await EnterpriseAuth.hashPassword(str(body.password));
-      send(
-        response,
-        201,
-        options.store.provisionUser(session.userId, tenantId, {
-          email: str(body.email),
-          passwordHash,
-          role,
-          ...(body.displayName == null ? {} : { displayName: str(body.displayName) }),
-        }),
-      );
-      return;
-    }
-    const memberMatch = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/members\/([^/]+)$/);
-    if (memberMatch && method === "DELETE") {
-      const tenantId = memberMatch[1]!;
-      const memberUserId = memberMatch[2]!;
-      if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-        throw new EnterpriseError("forbidden");
-      const affectedTargets = runtimeTargetsForTenant(options.store, session.userId, tenantId);
-      options.store.removeMembership(session.userId, tenantId, memberUserId);
-      closeUserSockets(memberUserId);
-      await Promise.all(affectedTargets.map((affected) => stopRuntime(affected)));
       send(response, 200, { ok: true });
       return;
     }

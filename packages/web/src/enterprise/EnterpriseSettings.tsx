@@ -4,6 +4,7 @@ import { createEnterpriseClient } from "./api.js";
 import { EnterpriseConnectorSettings } from "./EnterpriseConnectorSettings.js";
 import { EnterpriseModelProviderSettings } from "./EnterpriseModelProviderSettings.js";
 import { EnterpriseSkillSettings } from "./EnterpriseSkillSettings.js";
+import { EnterpriseUserSettings } from "./EnterpriseUserSettings.js";
 import { button, field, primary, zh } from "./presentation.js";
 
 const api = createEnterpriseClient();
@@ -40,9 +41,9 @@ export function EnterpriseSettings({
   onTenantChange: (tenantId: string) => void;
 }) {
   const isAdmin = role === "admin";
-  const [view, setView] = useState<"overview" | "customers" | "skills" | "model" | "connectors">(
-    "overview",
-  );
+  const [view, setView] = useState<
+    "overview" | "customers" | "users" | "skills" | "model" | "connectors"
+  >("overview");
   const [customerName, setCustomerName] = useState("");
   const [customerType, setCustomerType] = useState("");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -98,6 +99,7 @@ export function EnterpriseSettings({
   const tabs: Array<{ id: typeof view; label: string; adminOnly?: boolean }> = [
     { id: "overview", label: t.settingsOverview },
     { id: "customers", label: t.customers, adminOnly: true },
+    { id: "users", label: t.users, adminOnly: true },
     { id: "skills", label: t.sharedSkills, adminOnly: true },
     { id: "model", label: t.modelSettings },
     { id: "connectors", label: t.connectors },
@@ -252,6 +254,14 @@ export function EnterpriseSettings({
           ) : null}
           {view === "skills" && isAdmin ? (
             <EnterpriseSkillSettings t={t} tenantId={tenantId} csrfToken={csrfToken} />
+          ) : null}
+          {view === "users" && isAdmin ? (
+            <EnterpriseUserSettings
+              t={t}
+              tenantId={tenantId}
+              csrfToken={csrfToken}
+              customers={customers}
+            />
           ) : null}
           {view === "model" ? (
             <EnterpriseModelProviderSettings

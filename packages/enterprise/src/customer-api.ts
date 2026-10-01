@@ -20,11 +20,15 @@ export async function handleCustomerApiRequest(
     dependencies.helpers;
 
   if (path === "/api/enterprise/customers" && method === "GET") {
+    // 可见性(allowlist):成员只看到授权客户;管理员恒为全部(授权对其无效)。
+    const tenantId = str(url.searchParams.get("tenantId"));
+    const visible = new Set(options.store.visibleCustomerIdsFor(session.userId, tenantId));
     send(
       response,
       200,
       options.store
-        .listCustomers(session.userId, str(url.searchParams.get("tenantId")))
+        .listCustomers(session.userId, tenantId)
+        .filter((customer) => visible.has(customer.id))
         .map(publicCustomer),
     );
     return true;
@@ -96,6 +100,11 @@ export async function handleCustomerApiRequest(
   const customerActivate = path.match(/^\/api\/enterprise\/customers\/([^/]+)\/activate$/);
   if (customerActivate && method === "POST") {
     const customer = options.store.getCustomer(session.userId, customerActivate[1]!);
+    // 成员激活不可见客户与"不存在"同响应(404),不泄露租户客户目录。
+    if (
+      !options.store.visibleCustomerIdsFor(session.userId, customer.tenantId).includes(customer.id)
+    )
+      throw new EnterpriseError("not_found");
     // 激活只记账(下次 bootstrap 打开哪个客户的工作区);专家 runtime 与 socket
     // 都不重建——切换客户是原生工作区 tab 切换。
     options.store.activateCustomer(session.id, customer.id);

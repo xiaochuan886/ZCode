@@ -12,17 +12,23 @@ import {
   type UpsertUserConnectorAuthorizationInput,
 } from "./connector-authorization-store.js";
 import { ProviderStoreSupport } from "./provider-store-support.js";
+import { UserStoreSupport } from "./user-store-support.js";
 import type { TenantModelProviderInput, TenantModelProviderPatch } from "./provider-format.js";
 import type {
   TenantMcpConnectorInput,
   TenantMcpConnectorPatch,
 } from "./connector-store-support.js";
 import type {
+  CustomerAccess,
+  CustomerAccessMode,
   TenantMcpConnector,
   TenantMcpConnectorDistribution,
   TenantMcpConnectorOauthConfig,
   TenantModelProvider,
   TenantModelProviderDistribution,
+  TenantUserChange,
+  TenantUserSummary,
+  UserStatus,
   UserConnectorAuthorization,
   UserConnectorAuthorizationForRelay,
 } from "./types.js";
@@ -39,6 +45,7 @@ export class EnterpriseStore extends EnterpriseStoreBase {
   private readonly customerStore: CustomerStoreSupport;
   private readonly bindingStore: BindingStoreSupport;
   private readonly sessionStore: SessionStoreSupport;
+  private readonly userStore: UserStoreSupport;
 
   private constructor(
     db: DatabaseSync,
@@ -58,6 +65,7 @@ export class EnterpriseStore extends EnterpriseStoreBase {
     );
     this.providerStore = new ProviderStoreSupport(db, modelCredentialsEncryptionKey);
     this.connectorStore = new ConnectorStoreSupport(db, modelCredentialsEncryptionKey);
+    this.userStore = new UserStoreSupport(db, workspaceRoot);
     this.connectorAuthorizationStore = new ConnectorAuthorizationStoreSupport(
       db,
       modelCredentialsEncryptionKey,
@@ -136,6 +144,50 @@ export class EnterpriseStore extends EnterpriseStoreBase {
   }
   getActiveRuntimeTarget(sessionId: string) {
     return this.sessionStore.getActiveRuntimeTarget(sessionId);
+  }
+
+  listTenantUsers(actorId: string, tenantId: string): TenantUserSummary[] {
+    return this.userStore.listTenantUsers(actorId, tenantId);
+  }
+  getTenantUser(actorId: string, tenantId: string, userId: string): TenantUserSummary {
+    return this.userStore.getTenantUser(actorId, tenantId, userId);
+  }
+  createOrJoinTenantUser(
+    actorId: string,
+    tenantId: string,
+    input: { email: string; passwordHash?: string; role: "admin" | "member"; displayName?: string },
+  ): TenantUserChange {
+    return this.userStore.createOrJoinTenantUser(actorId, tenantId, input);
+  }
+  updateTenantUser(
+    actorId: string,
+    tenantId: string,
+    userId: string,
+    patch: {
+      displayName?: string;
+      role?: "admin" | "member";
+      passwordHash?: string;
+      status?: UserStatus;
+    },
+  ): TenantUserSummary {
+    return this.userStore.updateTenantUser(actorId, tenantId, userId, patch);
+  }
+  removeTenantUser(actorId: string, tenantId: string, userId: string): void {
+    this.userStore.removeTenantUser(actorId, tenantId, userId);
+  }
+  setUserCustomerAccess(
+    actorId: string,
+    tenantId: string,
+    userId: string,
+    input: { mode: CustomerAccessMode; customerIds?: string[] },
+  ): CustomerAccess {
+    return this.userStore.setUserCustomerAccess(actorId, tenantId, userId, input);
+  }
+  customerAccessForUser(userId: string, tenantId: string): CustomerAccess {
+    return this.userStore.customerAccessForUser(userId, tenantId);
+  }
+  visibleCustomerIdsFor(userId: string, tenantId: string): string[] {
+    return this.userStore.visibleCustomerIdsFor(userId, tenantId);
   }
 
   createCustomerSkill(
@@ -279,6 +331,10 @@ export class EnterpriseStore extends EnterpriseStoreBase {
     return this.connectorAuthorizationStore.signConnectorOauthState(sessionId, connectorId);
   }
   verifyConnectorOauthState(state: string, sessionId: string, connectorId: string): boolean {
-    return this.connectorAuthorizationStore.verifyConnectorOauthState(state, sessionId, connectorId);
+    return this.connectorAuthorizationStore.verifyConnectorOauthState(
+      state,
+      sessionId,
+      connectorId,
+    );
   }
 }

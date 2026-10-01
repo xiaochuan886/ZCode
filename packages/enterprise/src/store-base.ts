@@ -75,14 +75,17 @@ export class EnterpriseStoreBase {
       email: normalizedEmail,
       displayName: displayName?.trim() || normalizedEmail.split("@")[0] || normalizedEmail,
       createdAt: now(),
+      status: "active" as const,
     };
+    // v9 起 users 多了 status 列;显式列清单避免位置插入与列数漂移耦合。
     this.run(
-      "INSERT INTO users VALUES(?,?,?,?,?)",
+      "INSERT INTO users (id,email,display_name,password_hash,created_at,status) VALUES(?,?,?,?,?,?)",
       user.id,
       user.email,
       user.displayName,
       passwordHash,
       user.createdAt,
+      user.status,
     );
     return user;
   }
@@ -100,15 +103,8 @@ export class EnterpriseStoreBase {
     });
   }
   getUser(userId: string): User | null {
-    const row = this.one("SELECT id,email,display_name,created_at FROM users WHERE id=?", userId);
-    return row
-      ? {
-          id: String(row.id),
-          email: String(row.email),
-          displayName: String(row.display_name),
-          createdAt: String(row.created_at),
-        }
-      : null;
+    const row = this.one("SELECT * FROM users WHERE id=?", userId);
+    return row ? this.userFromRow(row) : null;
   }
   listTenantsForUser(userId: string): Tenant[] {
     return this.all(
@@ -123,14 +119,16 @@ export class EnterpriseStoreBase {
   findCredential(email: string): { user: User; passwordHash: string } | null {
     const row = this.one("SELECT * FROM users WHERE email=? COLLATE NOCASE", email.trim());
     if (!row) return null;
+    return { user: this.userFromRow(row), passwordHash: String(row.password_hash) };
+  }
+
+  private userFromRow(row: Row): User {
     return {
-      user: {
-        id: String(row.id),
-        email: String(row.email),
-        displayName: String(row.display_name),
-        createdAt: String(row.created_at),
-      },
-      passwordHash: String(row.password_hash),
+      id: String(row.id),
+      email: String(row.email),
+      displayName: String(row.display_name),
+      createdAt: String(row.created_at),
+      status: row.status == null ? "active" : (String(row.status) as User["status"]),
     };
   }
   addMembership(actorId: string, tenantId: string, userId: string, role: Role): Membership {

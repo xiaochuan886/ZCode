@@ -4,16 +4,39 @@ export interface Tenant {
   name: string;
   createdAt: string;
 }
+/** 用户状态:disabled = 全局封禁(登录拒绝、既有会话立即失效)。 */
+export type UserStatus = "active" | "disabled";
 export interface User {
   id: string;
   email: string;
   displayName: string;
   createdAt: string;
+  status: UserStatus;
 }
 export interface Membership {
   tenantId: string;
   userId: string;
   role: Role;
+}
+/** 客户可见性:all = 可见租户全部客户(无授权行的信任默认);selected = 恰好授权的客户。 */
+export type CustomerAccessMode = "all" | "selected";
+export interface CustomerAccess {
+  mode: CustomerAccessMode;
+  customerIds: string[];
+}
+/** 租户成员管理投影:全局身份 + 本租户角色/状态 + 客户可见性摘要。 */
+export interface TenantUserSummary {
+  id: string;
+  email: string;
+  displayName: string;
+  role: Role;
+  status: UserStatus;
+  createdAt: string;
+  customerAccess: CustomerAccess;
+}
+export interface TenantUserChange extends TenantUserSummary {
+  /** true = 邮箱对应的全局身份已存在,本次只新增了本租户成员关系。 */
+  joined: boolean;
 }
 export interface Customer {
   id: string;
@@ -39,7 +62,7 @@ export interface EnterpriseRuntimeTarget {
   workspacePath: string;
   runtimeId: string;
   kind: EnterpriseRuntimeKind;
-  /** 该专家租户全部客户工作区(网关补充);容器挂载与原生广播使用。 */
+  /** 该成员在租户内可见的客户工作区(网关按可见性过滤后补充);容器挂载与原生广播使用。 */
   workspacePaths?: string[];
 }
 export function expertRuntimeId(userId: string, tenantId: string): string {

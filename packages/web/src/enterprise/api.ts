@@ -112,6 +112,49 @@ export interface ImportedTenantSkill {
   ok: boolean;
   skill: { id: string; name: string };
 }
+export type TenantUserRole = "admin" | "member";
+export type TenantUserStatus = "active" | "disabled";
+/** 客户可见性:mode all(无授权,可见全部客户,向后兼容默认)或 selected(仅可见所列客户)。 */
+export interface TenantCustomerAccess {
+  mode: "all" | "selected";
+  customerIds: string[];
+}
+export interface TenantCustomerAccessInput {
+  mode: "all" | "selected";
+  customerIds?: string[];
+}
+/** 租户成员投影:customerAccess 在部分路由(如创建返回)可能缺省,缺省按 all 处理。 */
+export interface TenantUserView {
+  id: string;
+  email: string;
+  displayName: string;
+  role: TenantUserRole;
+  status: TenantUserStatus;
+  createdAt: string;
+  customerAccess?: TenantCustomerAccess;
+}
+export interface TenantUserInput {
+  email: string;
+  displayName?: string;
+  /** 仅全新全局用户必填;已有邮箱直接加入租户,由后端区分,空值不下发。 */
+  password?: string;
+  role: TenantUserRole;
+}
+export interface TenantUserPatch {
+  displayName?: string;
+  role?: TenantUserRole;
+  /** 管理员重置密码;留空(或省略)表示保留当前密码。 */
+  password?: string;
+  status?: TenantUserStatus;
+}
+/** 创建成员返回:扁平用户投影 + joined 区分「加入已有全局账号」与「新建账号」。 */
+export interface CreatedTenantUser extends TenantUserView {
+  joined: boolean;
+}
+export interface TenantCustomerAccessUpdateResult {
+  ok: boolean;
+  customerAccess: TenantCustomerAccess;
+}
 export interface Customer {
   id: string;
   tenantId?: string;
@@ -320,6 +363,52 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
       post<ImportedTenantSkill>(
         `/tenants/${encodeURIComponent(tenantId)}/skills/import`,
         input,
+        token,
+      ),
+    tenantUsers: (tenantId: string) =>
+      request<TenantUserView[]>(`/tenants/${encodeURIComponent(tenantId)}/users`),
+    createTenantUser: (tenantId: string, input: TenantUserInput, token: string | null) =>
+      post<CreatedTenantUser>(
+        `/tenants/${encodeURIComponent(tenantId)}/users`,
+        {
+          email: input.email.trim(),
+          ...(input.displayName?.trim() ? { displayName: input.displayName.trim() } : {}),
+          // 空密码不下发:已有邮箱加入无需密码,新建与加入由后端判断。
+          ...(input.password ? { password: input.password } : {}),
+          role: input.role,
+        },
+        token,
+      ),
+    updateTenantUser: (
+      tenantId: string,
+      userId: string,
+      patch: TenantUserPatch,
+      token: string | null,
+    ) =>
+      request<TenantUserView>(
+        `/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userId)}`,
+        {
+          method: "PATCH",
+          // 空密码表示保留当前密码:undefined 在 JSON 序列化时被剔除,服务端保留原值。
+          body: JSON.stringify({ ...patch, password: patch.password || undefined }),
+        },
+        token,
+      ),
+    deleteTenantUser: (tenantId: string, userId: string, token: string | null) =>
+      request<{ ok: boolean }>(
+        `/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userId)}`,
+        { method: "DELETE" },
+        token,
+      ),
+    setTenantUserCustomerAccess: (
+      tenantId: string,
+      userId: string,
+      access: TenantCustomerAccessInput,
+      token: string | null,
+    ) =>
+      request<TenantCustomerAccessUpdateResult>(
+        `/tenants/${encodeURIComponent(tenantId)}/users/${encodeURIComponent(userId)}/customer-access`,
+        { method: "PUT", body: JSON.stringify(access) },
         token,
       ),
   };

@@ -221,23 +221,32 @@ test("admins provision users atomically and customer updates stay tenant-scoped"
     });
     assert.equal(response.status, 403);
 
-    response = await api(base, adminSession, "/api/enterprise/users", "POST", {
-      tenantId: foreignTenant.id,
-      email: "cross-tenant@example.test",
-      password: "password-long",
-      role: "member",
-    });
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${foreignTenant.id}/users`,
+      "POST",
+      {
+        email: "cross-tenant@example.test",
+        password: "password-long",
+        role: "member",
+      },
+    );
     assert.equal(response.status, 404);
-    response = await api(base, memberSession, "/api/enterprise/users", "POST", {
-      tenantId: tenant.id,
-      email: "unauthorized@example.test",
-      password: "password-long",
-      role: "member",
-    });
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/users`,
+      "POST",
+      {
+        email: "unauthorized@example.test",
+        password: "password-long",
+        role: "member",
+      },
+    );
     assert.equal(response.status, 403);
 
-    response = await api(base, adminSession, "/api/enterprise/users", "POST", {
-      tenantId: tenant.id,
+    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/users`, "POST", {
       email: "provisioned@example.test",
       password: "provisioned password",
       role: "member",
@@ -245,21 +254,25 @@ test("admins provision users atomically and customer updates stay tenant-scoped"
     });
     assert.equal(response.status, 201);
     const provisioned = (await response.json()) as {
-      user: { id: string; email: string };
-      membership: { tenantId: string; role: string };
+      id: string;
+      email: string;
+      role: string;
+      status: string;
+      customerAccess: unknown;
+      joined: boolean;
     };
-    assert.equal(provisioned.user.email, "provisioned@example.test");
-    assert.equal(provisioned.membership.tenantId, tenant.id);
-    assert.equal(provisioned.membership.role, "member");
-    response = await api(base, adminSession, "/api/enterprise/users", "POST", {
-      tenantId: tenant.id,
+    assert.equal(provisioned.email, "provisioned@example.test");
+    assert.equal(provisioned.role, "member");
+    assert.equal(provisioned.status, "active");
+    assert.equal(provisioned.joined, false);
+    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/users`, "POST", {
       email: "provisioned@example.test",
       password: "another password",
       role: "admin",
     });
     assert.equal(response.status, 409);
     assert.deepEqual(
-      store.listTenantsForUser(provisioned.user.id).map((item) => item.id),
+      store.listTenantsForUser(provisioned.id).map((item) => item.id),
       [tenant.id],
     );
 
@@ -712,7 +725,7 @@ test("membership revocation immediately closes an active user's WebSocket", asyn
     const response = await api(
       base,
       adminSession,
-      `/api/enterprise/tenants/${tenant.id}/members/${member.id}`,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}`,
       "DELETE",
     );
     assert.equal(response.status, 200);
@@ -2080,6 +2093,329 @@ test("cap eviction destroys the evicted expert's attached socket fail-fast", asy
       native.close(() => resolve());
       native.closeAllConnections();
     });
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("customer visibility filters lists, activation, bootstrap and runtime mounts", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-visibility-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user: admin } = store.bootstrapAdmin("Tenant", "vis-admin@example.test", hash);
+  const { user: member } = store.provisionUser(admin.id, tenant.id, {
+    email: "vis-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const alpha = await store.createCustomer(admin.id, tenant.id, { name: "Alpha" });
+  const beta = await store.createCustomer(admin.id, tenant.id, { name: "Beta" });
+  const gamma = await store.createCustomer(admin.id, tenant.id, { name: "Gamma" });
+  const auth = new EnterpriseAuth(store);
+  // 侦查 manager:记录每次 start 的完整挂载清单,断言可见性在挂载层生效。
+  const starts: Array<{ runtimeId: string; workspacePath: string; workspacePaths: string[] }> = [];
+  const stops: string[] = [];
+  const manager = new RuntimeManager({
+    async start(input) {
+      const runtimeId = input.runtimeId ?? input.id;
+      starts.push({
+        runtimeId,
+        workspacePath: input.workspacePath,
+        workspacePaths: [...(input.workspacePaths ?? [])],
+      });
+      return {
+        id: `fake-${input.id}`,
+        url: "http://127.0.0.1:9",
+        workspacePath: input.workspacePath,
+        stop: async () => {
+          stops.push(runtimeId);
+        },
+      };
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  const memberRuntimeId = expertRuntimeId(member.id, tenant.id);
+  const adminRuntimeId = expertRuntimeId(admin.id, tenant.id);
+  const bindingFor = (userId: string): EnterpriseRuntimeTarget => ({
+    id: expertRuntimeId(userId, tenant.id),
+    runtimeId: expertRuntimeId(userId, tenant.id),
+    tenantId: tenant.id,
+    userId,
+    workspacePath: alpha.workspacePath,
+    kind: "expert",
+  });
+  try {
+    const adminSession = await login(base, admin.email);
+    const memberSession = await login(base, member.email);
+    const memberAuth = await auth.login(member.email, password);
+    const bootstrapFor = async (
+      session: BrowserSession,
+    ): Promise<{ activeCustomer: { id: string } | null }> => {
+      const response = await fetch(`${base}/api/enterprise/bootstrap`, {
+        headers: { cookie: session.cookie },
+      });
+      assert.equal(response.status, 200);
+      return (await response.json()) as { activeCustomer: { id: string } | null };
+    };
+
+    // 无授权成员看到全部(向后兼容的信任默认)。
+    let response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/customers?tenantId=${tenant.id}`,
+      "GET",
+    );
+    assert.equal(((await response.json()) as Array<{ id: string }>).length, 3);
+
+    // 成员读成员列表被拒;管理员授权子集 {alpha, gamma}。
+    response = await api(base, memberSession, `/api/enterprise/tenants/${tenant.id}/users`, "GET");
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}/customer-access`,
+      "PUT",
+      { mode: "selected", customerIds: [gamma.id, alpha.id] },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      ok: true,
+      customerAccess: { mode: "selected", customerIds: [alpha.id, gamma.id].sort() },
+    });
+
+    // 列表过滤:成员只看到授权客户,管理员不受限。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/customers?tenantId=${tenant.id}`,
+      "GET",
+    );
+    assert.deepEqual(
+      ((await response.json()) as Array<{ id: string }>).map((customer) => customer.id).sort(),
+      [gamma.id, alpha.id].sort(),
+    );
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/customers?tenantId=${tenant.id}`,
+      "GET",
+    );
+    assert.equal(((await response.json()) as Array<{ id: string }>).length, 3);
+
+    // 激活不可见客户与不存在同响应;可见客户正常激活。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/customers/${beta.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 404);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/customers/${gamma.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+
+    // bootstrap:激活客户仍可见时照常返回。
+    assert.equal((await bootstrapFor(memberSession)).activeCustomer?.id, gamma.id);
+
+    // 挂载层:成员 runtime 只挂授权工作区,主工作区保持激活客户;管理员挂全部。
+    const adminAuth = await auth.login(admin.email, password);
+    // ensureViaProxy 携带的是 auth.login 签发的会话,激活也落在同一会话上。
+    store.activateCustomer(memberAuth.session.id, gamma.id);
+    store.activateCustomer(adminAuth.session.id, beta.id);
+    await ensureViaProxy(base, memberAuth.token);
+    await ensureViaProxy(base, adminAuth.token);
+    assert.deepEqual(
+      starts.map((start) => start.runtimeId),
+      [memberRuntimeId, adminRuntimeId],
+    );
+    assert.equal(starts[0]!.workspacePath, gamma.workspacePath);
+    assert.deepEqual(
+      [...starts[0]!.workspacePaths].sort(),
+      [alpha.workspacePath, gamma.workspacePath].sort(),
+    );
+    assert.equal(starts[0]!.workspacePaths.includes(beta.workspacePath), false);
+    assert.equal(starts[1]!.workspacePath, beta.workspacePath);
+    assert.deepEqual(
+      [...starts[1]!.workspacePaths].sort(),
+      [alpha.workspacePath, beta.workspacePath, gamma.workspacePath].sort(),
+    );
+
+    // 仅改显示名:不触发任何停机。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}`,
+      "PATCH",
+      { displayName: "Visible Member" },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(
+      ((await response.json()) as { displayName: string }).displayName,
+      "Visible Member",
+    );
+    assert.deepEqual(stops, []);
+    assert.ok(manager.getBinding(bindingFor(member.id)));
+    assert.ok(manager.getBinding(bindingFor(admin.id)));
+
+    // 授权变化只停该成员自己的 runtime;管理员 runtime 不受牵连。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}/customer-access`,
+      "PUT",
+      { mode: "selected", customerIds: [alpha.id] },
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(stops, [memberRuntimeId]);
+    assert.equal(manager.getBinding(bindingFor(member.id)), null);
+    assert.ok(manager.getBinding(bindingFor(admin.id)));
+
+    // bootstrap:激活客户(gamma)不再可见 → null,壳层会自动激活第一个可见客户。
+    assert.equal((await bootstrapFor(memberSession)).activeCustomer, null);
+
+    // 主工作区回退:会话仍指向 gamma,但 gamma 不可见 → 新 runtime 挂 alpha 且
+    // 主工作区回退为第一个可见客户。
+    await ensureViaProxy(base, memberAuth.token);
+    assert.equal(starts[2]!.workspacePath, alpha.workspacePath);
+    assert.deepEqual(starts[2]!.workspacePaths, [alpha.workspacePath]);
+
+    // 管理员读成员列表:投影带可见性摘要;自我降级被守卫拒绝(409)。
+    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/users`, "GET");
+    assert.equal(response.status, 200);
+    const users = (await response.json()) as Array<{
+      id: string;
+      customerAccess: { mode: string; customerIds: string[] };
+    }>;
+    assert.deepEqual(users.find((entry) => entry.id === member.id)!.customerAccess, {
+      mode: "selected",
+      customerIds: [alpha.id],
+    });
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${admin.id}`,
+      "PATCH",
+      { role: "member" },
+    );
+    assert.equal(response.status, 409);
+
+    // 禁用:只停该成员 runtime,再次记录一次 member 停机;管理员 runtime 存活。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}`,
+      "PATCH",
+      { status: "disabled" },
+    );
+    assert.equal(((await response.json()) as { status: string }).status, "disabled");
+    assert.deepEqual(stops, [memberRuntimeId, memberRuntimeId]);
+    assert.ok(manager.getBinding(bindingFor(admin.id)));
+  } finally {
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("disabling a user destroys their live socket and rejects login", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-disable-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user: admin } = store.bootstrapAdmin(
+    "Tenant",
+    "disable-admin@example.test",
+    hash,
+  );
+  const { user: member } = store.provisionUser(admin.id, tenant.id, {
+    email: "disable-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const customer = await store.createCustomer(admin.id, tenant.id, { name: "Acme" });
+  // 代理需要一个真实 ws 目标才能完成升级握手。
+  const runtimeTarget = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await once(runtimeTarget, "listening");
+  const runtimePort = (runtimeTarget.address() as AddressInfo).port;
+  const auth = new EnterpriseAuth(store);
+  const { manager, events } = recordingManagerFor(`http://127.0.0.1:${runtimePort}`);
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await login(base, member.email);
+    const adminSession = await login(base, admin.email);
+    // 禁用前签发的会话:用于验证状态在校验路径上立即生效,不等 socket 清扫。
+    const issuedBeforeDisable = await auth.login(member.email, password);
+    const activated = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${customer.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(activated.status, 200);
+    const socket = new NodeWebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { Cookie: browser.cookie, Origin: base },
+    });
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await once(socket, "open");
+    // 禁用:库状态先变,随后销毁该用户全部会话 socket 并停其本租户 runtime。
+    const response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/users/${member.id}`,
+      "PATCH",
+      { status: "disabled" },
+    );
+    assert.equal(response.status, 200);
+    await Promise.race([
+      closed,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("disabled user socket was not destroyed")), 5_000),
+      ),
+    ]);
+    assert.ok(events.includes(`stop:${expertRuntimeId(member.id, tenant.id)}`));
+    // 既有会话在下一次校验时立即失效(resolveSession 按 users.status 拒绝)。
+    assert.equal(auth.resolveSession(issuedBeforeDisable.token), null);
+    // 重新登录被拒:与错误密码相同的 invalid-credentials 路径,不泄露失败原因。
+    const relogin = await fetch(`${base}/api/enterprise/login`, {
+      method: "POST",
+      headers: { origin: base, "content-type": "application/json" },
+      body: JSON.stringify({ email: member.email, password }),
+    });
+    assert.equal(relogin.status, 401);
+  } finally {
+    await new Promise<void>((resolve) => {
+      runtimeTarget.close(() => resolve());
+    });
+    await gateway.close();
     store.close();
     await rm(dir, { recursive: true, force: true });
   }

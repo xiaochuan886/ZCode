@@ -80,9 +80,15 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
   store.close();
 
   // 把库回退成 v3 形态：补回旧架构列与旧表，模拟尚未删除 legacy 的存量库。
+  // users 表重建为 v8 形态(无 status 列),让 v9 升级走真实的 ALTER TABLE 路径。
   const raw = new DatabaseSync(dbPath);
   raw.exec(`
     PRAGMA foreign_keys = OFF;
+    CREATE TABLE users_v8 (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE, display_name TEXT NOT NULL, password_hash TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT INTO users_v8 (id,email,display_name,password_hash,created_at)
+      SELECT id,email,display_name,password_hash,created_at FROM users;
+    DROP TABLE users;
+    ALTER TABLE users_v8 RENAME TO users;
     CREATE TABLE service_spaces (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), name TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(tenant_id,name));
     CREATE TABLE service_objects (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), name TEXT NOT NULL, type TEXT NOT NULL, metadata TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
     CREATE TABLE cases (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id), service_space_id TEXT NOT NULL REFERENCES service_spaces(id), service_object_id TEXT NOT NULL REFERENCES service_objects(id), title TEXT NOT NULL, category TEXT NOT NULL, status TEXT NOT NULL, workspace_path TEXT NOT NULL UNIQUE, object_snapshot TEXT NOT NULL, context_snapshot TEXT NOT NULL, native_session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -121,7 +127,7 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
         .prepare("PRAGMA user_version")
         .get().user_version,
     );
-    assert.equal(version, 8);
+    assert.equal(version, 9);
     const customers = migrated.listCustomers(user.id, tenant.id);
     assert.equal(customers.length, 1);
     assert.equal(customers[0]!.id, customer.id);
@@ -183,6 +189,28 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
         `v8 column ${column} should exist`,
       );
     }
+    // v9 非破坏性追加:users.status 列与客户可见性授权表就位;存量用户迁移为 active。
+    const userColumns = (
+      migrated as unknown as {
+        db: { prepare(sql: string): { all(): Array<{ name: string; dflt_value: string }> } };
+      }
+    ).db
+      .prepare("PRAGMA table_info(users)")
+      .all();
+    const statusColumn = userColumns.find((column) => column.name === "status");
+    assert.equal(Boolean(statusColumn), true, "v9 users.status should exist");
+    assert.equal(migrated.getUser(user.id)?.status, "active", "existing user upgrades to active");
+    assert.equal(
+      tables.has("customer_access_grants"),
+      true,
+      "v9 customer_access_grants should exist",
+    );
+    assert.deepEqual(migrated.listTenantUsers(user.id, tenant.id).length, 1);
+    assert.deepEqual(
+      migrated.customerAccessForUser(user.id, tenant.id),
+      { mode: "all", customerIds: [] },
+      "upgraded member has no grants and sees all",
+    );
   } finally {
     migrated.close();
     await rm(dir, { recursive: true, force: true });
@@ -309,12 +337,17 @@ test("v7 migration creates catalog tables on a fresh database", async () => {
         }>
       ).map((row) => row.name),
     );
+    const userColumns = (
+      raw.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>
+    ).map((column) => column.name);
     raw.close();
-    // v8 之后全新库基线即 v8:目录表与每用户授权表一次到位。
-    assert.equal(version, 8);
+    // v9 之后全新库基线即 v9:目录表、每用户授权表与客户可见性授权表一次到位。
+    assert.equal(version, 9);
     assert.equal(tables.has("tenant_model_providers"), true);
     assert.equal(tables.has("tenant_mcp_connectors"), true);
     assert.equal(tables.has("user_mcp_connector_authorizations"), true);
+    assert.equal(tables.has("customer_access_grants"), true);
+    assert.equal(userColumns.includes("status"), true, "fresh users table carries status");
   } finally {
     store.close();
     await rm(dir, { recursive: true, force: true });
@@ -765,8 +798,7 @@ test("user-oauth connectors cross-reject auth fields and keep per-user tokens en
       /validation/,
     );
     assert.throws(
-      () =>
-        store.updateTenantMcpConnector(user.id, "missing", { authMode: "user-oauth" }),
+      () => store.updateTenantMcpConnector(user.id, "missing", { authMode: "user-oauth" }),
       /not_found/,
     );
 
@@ -803,7 +835,11 @@ test("user-oauth connectors cross-reject auth fields and keep per-user tokens en
     const second = store.userConnectorAuthorization(connector.id, member.user.id)!;
     assert.equal(second.accessToken, "member-access-2");
     assert.equal(second.refreshToken, "");
-    assert.equal(second.relayToken, first.relayToken, "relay token must stay stable across re-grants");
+    assert.equal(
+      second.relayToken,
+      first.relayToken,
+      "relay token must stay stable across re-grants",
+    );
     // 授权状态按访问用户区分:成员已连接,管理员未连接。
     assert.equal(store.getTenantMcpConnector(member.user.id, connector.id).authorized, true);
     assert.equal(store.getTenantMcpConnector(user.id, connector.id).authorized, false);
@@ -831,7 +867,10 @@ test("user-oauth connectors cross-reject auth fields and keep per-user tokens en
     assert.equal(relayHit!.clientSecret, "super-secret-client-value");
     assert.equal(relayHit!.tokenUrl, oauth.tokenUrl);
     assert.equal(
-      store.findUserConnectorAuthorizationForRelay(connector.id, "x".repeat(first.relayToken.length)),
+      store.findUserConnectorAuthorizationForRelay(
+        connector.id,
+        "x".repeat(first.relayToken.length),
+      ),
       null,
     );
     // 刷新持久化:只换令牌与到期,relay_token 不变。
@@ -846,13 +885,13 @@ test("user-oauth connectors cross-reject auth fields and keep per-user tokens en
     assert.equal(refreshed.relayToken, first.relayToken);
 
     // 成员只能撤销自己的授权行;管理员无行时同样 404。
-    assert.throws(
-      () => store.deleteUserConnectorAuthorization(user.id, connector.id),
-      /not_found/,
-    );
+    assert.throws(() => store.deleteUserConnectorAuthorization(user.id, connector.id), /not_found/);
     store.deleteUserConnectorAuthorization(member.user.id, connector.id);
     assert.equal(store.userConnectorAuthorization(connector.id, member.user.id), null);
-    assert.equal(store.findUserConnectorAuthorizationForRelay(connector.id, first.relayToken), null);
+    assert.equal(
+      store.findUserConnectorAuthorizationForRelay(connector.id, first.relayToken),
+      null,
+    );
     assert.equal(store.getTenantMcpConnector(member.user.id, connector.id).authorized, false);
     assert.throws(
       () => store.deleteUserConnectorAuthorization(member.user.id, connector.id),
@@ -924,6 +963,218 @@ test("connector oauth state binds session and connector and expires after ten mi
     } finally {
       mock.timers.reset();
     }
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("tenant user management: admin gating, join-by-email, guards and customer-access grants", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-users-"));
+  const store = await EnterpriseStore.open(join(dir, "enterprise.db"), join(dir, "workspaces"));
+  try {
+    const a = store.bootstrapAdmin("Alpha", "alpha-admin@example.test", "hash-a");
+    const b = store.bootstrapAdmin("Beta", "beta-admin@example.test", "hash-b");
+    const first = await store.createCustomer(a.user.id, a.tenant.id, { name: "First" });
+    const second = await store.createCustomer(a.user.id, a.tenant.id, { name: "Second" });
+    const foreignCustomer = await store.createCustomer(b.user.id, b.tenant.id, {
+      name: "Beta only",
+    });
+
+    // 管理员门槛:成员与外租户管理员都不能管理成员。
+    const member = store.provisionUser(a.user.id, a.tenant.id, {
+      email: "member@example.test",
+      passwordHash: "hash-member",
+      role: "member",
+    });
+    assert.throws(() => store.listTenantUsers(member.user.id, a.tenant.id), /forbidden/);
+    assert.throws(() => store.listTenantUsers(b.user.id, a.tenant.id), /not_found/);
+    assert.throws(
+      () =>
+        store.createOrJoinTenantUser(member.user.id, a.tenant.id, {
+          email: "x@example.test",
+          role: "member",
+        }),
+      /forbidden/,
+    );
+    assert.throws(
+      () => store.updateTenantUser(b.user.id, a.tenant.id, member.user.id, { status: "disabled" }),
+      /not_found/,
+    );
+    assert.throws(
+      () => store.removeTenantUser(b.user.id, a.tenant.id, member.user.id),
+      /not_found/,
+    );
+    assert.throws(
+      () =>
+        store.setUserCustomerAccess(b.user.id, a.tenant.id, member.user.id, {
+          mode: "selected",
+          customerIds: [first.id],
+        }),
+      /not_found/,
+    );
+
+    // join-by-email:全新邮箱缺密码 → validation;有密码 → 创建(joined:false)。
+    assert.throws(
+      () =>
+        store.createOrJoinTenantUser(a.user.id, a.tenant.id, {
+          email: "brand-new@example.test",
+          role: "member",
+        }),
+      /validation/,
+    );
+    const created = store.createOrJoinTenantUser(a.user.id, a.tenant.id, {
+      email: "brand-new@example.test",
+      passwordHash: "hash-new",
+      role: "member",
+      displayName: "Brand New",
+    });
+    assert.equal(created.joined, false);
+    assert.equal(created.email, "brand-new@example.test");
+    assert.equal(created.displayName, "Brand New");
+    assert.equal(created.status, "active");
+    assert.deepEqual(created.customerAccess, { mode: "all", customerIds: [] });
+    // 同租户重复邮箱 → conflict。
+    assert.throws(
+      () =>
+        store.createOrJoinTenantUser(a.user.id, a.tenant.id, {
+          email: "brand-new@example.test",
+          passwordHash: "another-hash",
+          role: "member",
+        }),
+      /conflict/,
+    );
+    // 已有全局身份(Beta 租户管理员)免密加入本租户:密码字段被忽略,身份保留原凭据。
+    const joined = store.createOrJoinTenantUser(a.user.id, a.tenant.id, {
+      email: "beta-admin@example.test",
+      role: "member",
+    });
+    assert.equal(joined.joined, true);
+    assert.equal(joined.id, b.user.id);
+    assert.equal(store.findCredential("beta-admin@example.test")!.passwordHash, "hash-b");
+    assert.equal(store.listTenantsForUser(b.user.id).length, 2);
+
+    // 成员列表投影:含状态与客户可见性摘要;无授权成员 = all。
+    const listed = store.listTenantUsers(a.user.id, a.tenant.id);
+    assert.deepEqual(
+      listed.map((entry) => entry.id).sort(),
+      [a.user.id, b.user.id, member.user.id, created.id].sort(),
+    );
+    assert.ok(listed.every((entry) => entry.status === "active"));
+    assert.ok(listed.every((entry) => entry.customerAccess.mode === "all"));
+
+    // 守卫:唯一可用管理员不能自我降级/自我禁用/自我移除。
+    assert.throws(
+      () => store.updateTenantUser(a.user.id, a.tenant.id, a.user.id, { role: "member" }),
+      /conflict/,
+    );
+    assert.throws(
+      () => store.updateTenantUser(a.user.id, a.tenant.id, a.user.id, { status: "disabled" }),
+      /conflict/,
+    );
+    assert.throws(() => store.removeTenantUser(a.user.id, a.tenant.id, a.user.id), /conflict/);
+    // 改名与重置密码不触发守卫,也不改变角色/状态。
+    const renamed = store.updateTenantUser(a.user.id, a.tenant.id, member.user.id, {
+      displayName: "Renamed Member",
+      passwordHash: "hash-rotated",
+    });
+    assert.equal(renamed.displayName, "Renamed Member");
+    assert.equal(store.findCredential("member@example.test")!.passwordHash, "hash-rotated");
+    // 有第二个可用管理员时可以降级原管理员。
+    store.updateTenantUser(a.user.id, a.tenant.id, member.user.id, { role: "admin" });
+    assert.equal(
+      store.updateTenantUser(member.user.id, a.tenant.id, a.user.id, { role: "member" }).role,
+      "member",
+    );
+    // 唯一可用管理员是 member:自我降级被拒;被 disabled 管理员降级/禁用/移除也被拒
+    // (最后管理员计数只统计 active 管理员)。
+    assert.throws(
+      () => store.updateTenantUser(member.user.id, a.tenant.id, member.user.id, { role: "member" }),
+      /conflict/,
+    );
+    store.updateTenantUser(member.user.id, a.tenant.id, created.id, { role: "admin" });
+    store.updateTenantUser(member.user.id, a.tenant.id, created.id, { status: "disabled" });
+    assert.throws(
+      () => store.updateTenantUser(created.id, a.tenant.id, member.user.id, { role: "member" }),
+      /conflict/,
+    );
+    assert.throws(
+      () => store.updateTenantUser(created.id, a.tenant.id, member.user.id, { status: "disabled" }),
+      /conflict/,
+    );
+    assert.throws(
+      () => store.removeTenantUser(created.id, a.tenant.id, member.user.id),
+      /conflict/,
+    );
+    // 重新启用第二个管理员后移除 member:成员关系删除,全局用户行保留。
+    store.updateTenantUser(member.user.id, a.tenant.id, created.id, { status: "active" });
+    store.removeTenantUser(created.id, a.tenant.id, member.user.id);
+    assert.throws(() => store.getTenantUser(created.id, a.tenant.id, member.user.id), /not_found/);
+    assert.equal(store.getUser(member.user.id)?.email, "member@example.test");
+    assert.equal(store.listTenantsForUser(member.user.id).length, 0);
+
+    // 禁用:既有会话立即失效(resolveSession 在校验路径上拒绝),重新启用后恢复。
+    store.issueSession(a.user.id, "surviving-token", "surviving-csrf");
+    assert.ok(store.resolveSession("surviving-token"));
+    assert.equal(
+      store.updateTenantUser(created.id, a.tenant.id, a.user.id, { status: "disabled" }).status,
+      "disabled",
+    );
+    assert.equal(store.resolveSession("surviving-token"), null);
+    store.updateTenantUser(created.id, a.tenant.id, a.user.id, { status: "active" });
+    assert.ok(store.resolveSession("surviving-token"));
+
+    // 客户可见性:selected 必须非空且全部属于本租户。
+    assert.throws(
+      () =>
+        store.setUserCustomerAccess(created.id, a.tenant.id, a.user.id, {
+          mode: "selected",
+          customerIds: [],
+        }),
+      /validation/,
+    );
+    assert.throws(
+      () =>
+        store.setUserCustomerAccess(created.id, a.tenant.id, a.user.id, {
+          mode: "selected",
+          customerIds: [first.id, foreignCustomer.id],
+        }),
+      /validation/,
+    );
+    assert.deepEqual(
+      store.setUserCustomerAccess(created.id, a.tenant.id, a.user.id, {
+        mode: "selected",
+        customerIds: [second.id, first.id],
+      }),
+      { mode: "selected", customerIds: [first.id, second.id].sort() },
+    );
+    // 授权读取不做角色特判;可见集合 = 恰好授权的客户。
+    assert.deepEqual(store.customerAccessForUser(a.user.id, a.tenant.id), {
+      mode: "selected",
+      customerIds: [first.id, second.id].sort(),
+    });
+    assert.deepEqual(store.visibleCustomerIdsFor(a.user.id, a.tenant.id), [first.id, second.id]);
+    // 管理员恒可见全部,即使其名下有授权行;无授权成员 = 全部(信任默认)。
+    store.setUserCustomerAccess(created.id, a.tenant.id, created.id, {
+      mode: "selected",
+      customerIds: [first.id],
+    });
+    assert.deepEqual(store.visibleCustomerIdsFor(created.id, a.tenant.id), [first.id, second.id]);
+    assert.deepEqual(store.visibleCustomerIdsFor(a.user.id, a.tenant.id), [first.id, second.id]);
+    // 列表投影携带可见性摘要;切回 all 清空授权。
+    assert.deepEqual(
+      store.listTenantUsers(created.id, a.tenant.id).find((entry) => entry.id === created.id)!
+        .customerAccess,
+      { mode: "selected", customerIds: [first.id] },
+    );
+    assert.deepEqual(
+      store.setUserCustomerAccess(created.id, a.tenant.id, a.user.id, { mode: "all" }),
+      { mode: "all", customerIds: [] },
+    );
+    assert.deepEqual(store.customerAccessForUser(a.user.id, a.tenant.id), {
+      mode: "all",
+      customerIds: [],
+    });
   } finally {
     store.close();
     await rm(dir, { recursive: true, force: true });

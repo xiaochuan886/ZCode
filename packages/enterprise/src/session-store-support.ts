@@ -49,8 +49,12 @@ export class SessionStoreSupport extends EnterpriseStoreBase {
   }
 
   resolveSession(tokenHash: string): EnterpriseSession | null {
+    // users.status(v9)在会话校验路径上硬性生效:被禁用的用户即使会话未到期、
+    // socket 清扫尚未跑到,下一次校验(HTTP 请求 / ws 定时复核)也立即失效,
+    // 不必等清理任务追上。用户行缺失同样拒绝(fail closed)。
     const row = this.one(
-      "SELECT * FROM sessions WHERE token_hash=? AND expires_at>?",
+      `SELECT s.* FROM sessions s JOIN users u ON u.id = s.user_id
+        WHERE s.token_hash=? AND s.expires_at>? AND u.status='active'`,
       tokenHash,
       now(),
     );
@@ -92,11 +96,7 @@ export class SessionStoreSupport extends EnterpriseStoreBase {
       const row = this.one("SELECT * FROM sessions WHERE id=? AND expires_at>?", sessionId, now());
       if (!row) throw new EnterpriseError("forbidden");
       const customer = this.getCustomer(String(row.user_id), customerId);
-      this.run(
-        "UPDATE sessions SET active_customer_id=? WHERE id=?",
-        customer.id,
-        sessionId,
-      );
+      this.run("UPDATE sessions SET active_customer_id=? WHERE id=?", customer.id, sessionId);
       this.run("UPDATE customers SET last_used_at=? WHERE id=?", now(), customer.id);
       return { ...this.session(row), activeCustomerId: customer.id };
     });

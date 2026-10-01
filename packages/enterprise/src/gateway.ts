@@ -109,14 +109,20 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     const port = address && typeof address === "object" ? address.port : (options.port ?? 3031);
     return `http://${options.host ?? "127.0.0.1"}:${port}`;
   };
-  /** 补齐专家目标的挂载清单:该租户全部客户工作区都会挂进这个 runtime。 */
+  /** 补齐专家目标的挂载清单:只挂该成员可见的客户工作区(安全边界)。 */
   const expertTargetWithWorkspaces = (value: EnterpriseRuntimeTarget): EnterpriseRuntimeTarget => {
-    const customers = options.store.listCustomers(value.userId, value.tenantId);
-    return {
-      ...value,
-      workspacePath: value.workspacePath || customers[0]?.workspacePath || "",
-      workspacePaths: customers.map((customer) => customer.workspacePath),
-    };
+    const visible = new Set(options.store.visibleCustomerIdsFor(value.userId, value.tenantId));
+    const customers = options.store
+      .listCustomers(value.userId, value.tenantId)
+      .filter((customer) => visible.has(customer.id));
+    const workspacePaths = customers.map((customer) => customer.workspacePath);
+    // 主工作区(ZCODE_SERVER_WORKSPACE)也必须是可见客户:原值不可见时回退到
+    // 第一个可见客户;一个都不可见时保留原值并挂载空集——容器没有可挂载的
+    // 租户工作区,但启动 env 仍有确定的路径值,管理员补授权后即可自愈。
+    const workspacePath = workspacePaths.includes(value.workspacePath)
+      ? value.workspacePath
+      : (workspacePaths[0] ?? value.workspacePath);
+    return { ...value, workspacePath, workspacePaths };
   };
   // 空闲回收与并发上限(可选,默认关闭):治理器复用上面的 stopRuntime 停止路径。
   const governor = new RuntimeGovernor({
@@ -193,7 +199,15 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           ...tenant,
           role: options.store.getMembership(session.userId, tenant.id).role,
         }));
-        const activeCustomer = options.store.getActiveCustomer(session.id);
+        // 可见性:已激活的客户不再对该成员可见时返回 null,壳层自动激活第一个可见客户。
+        const recorded = options.store.getActiveCustomer(session.id);
+        const activeCustomer =
+          recorded &&
+          options.store
+            .visibleCustomerIdsFor(session.userId, recorded.tenantId)
+            .includes(recorded.id)
+            ? recorded
+            : null;
         send(response, 200, {
           enabled: true,
           user: user ? { id: user.id, email: user.email, displayName: user.displayName } : null,

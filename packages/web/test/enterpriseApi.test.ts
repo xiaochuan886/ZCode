@@ -303,6 +303,119 @@ test("user-oauth connector payloads carry the oauth client fields and the author
   ]);
 });
 
+test("tenant user routes are tenant and user scoped with CSRF on mutations", async () => {
+  const calls: { url: string; method: string | undefined; body: unknown; csrf: string | null }[] =
+    [];
+  const client = createEnterpriseClient(async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method,
+      body: init?.body ? JSON.parse(String(init?.body)) : null,
+      csrf: new Headers(init?.headers).get("X-CSRF-Token"),
+    });
+    return new Response(
+      JSON.stringify({ ok: true, customerAccess: { mode: "all", customerIds: [] } }),
+      {
+        status: 200,
+      },
+    );
+  });
+  await client.tenantUsers("tenant-1");
+  await client.createTenantUser(
+    "tenant-1",
+    { email: "new@example.com", displayName: "New", password: "initial-secret", role: "admin" },
+    "csrf-1",
+  );
+  await client.updateTenantUser("tenant-1", "user-1", { status: "disabled" }, "csrf-1");
+  await client.deleteTenantUser("tenant-1", "user-1", "csrf-1");
+  await client.setTenantUserCustomerAccess(
+    "tenant-1",
+    "user-1",
+    { mode: "selected", customerIds: ["customer-1", "customer-2"] },
+    "csrf-1",
+  );
+  await client.setTenantUserCustomerAccess("tenant-1", "user-1", { mode: "all" }, "csrf-1");
+  assert.deepEqual(calls, [
+    {
+      url: "/api/enterprise/tenants/tenant-1/users",
+      method: undefined,
+      body: null,
+      csrf: null,
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/users",
+      method: "POST",
+      body: {
+        email: "new@example.com",
+        displayName: "New",
+        password: "initial-secret",
+        role: "admin",
+      },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/users/user-1",
+      method: "PATCH",
+      body: { status: "disabled" },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/users/user-1",
+      method: "DELETE",
+      body: null,
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/users/user-1/customer-access",
+      method: "PUT",
+      body: { mode: "selected", customerIds: ["customer-1", "customer-2"] },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/users/user-1/customer-access",
+      method: "PUT",
+      body: { mode: "all" },
+      csrf: "csrf-1",
+    },
+  ]);
+});
+
+test("tenant user payloads omit blank passwords and report join versus create", async () => {
+  let sent: { url: string; body: unknown } | undefined;
+  const client = createEnterpriseClient(async (url, init) => {
+    sent = { url: String(url), body: JSON.parse(String(init?.body)) };
+    return new Response(
+      JSON.stringify({
+        id: "user-1",
+        email: "expert@example.com",
+        displayName: "Expert",
+        role: "member",
+        status: "active",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        joined: true,
+      }),
+      { status: 201 },
+    );
+  });
+  const created = await client.createTenantUser(
+    "tenant-1",
+    { email: "expert@example.com", displayName: "  Expert  ", password: "", role: "member" },
+    "csrf-1",
+  );
+  assert.equal(created.joined, true);
+  assert.equal(created.email, "expert@example.com");
+  assert.equal(created.role, "member");
+  assert.deepEqual(sent, {
+    url: "/api/enterprise/tenants/tenant-1/users",
+    body: { email: "expert@example.com", displayName: "Expert", role: "member" },
+  });
+  await client.updateTenantUser("tenant-1", "user-1", { password: "" }, "csrf-1");
+  assert.deepEqual(sent, {
+    url: "/api/enterprise/tenants/tenant-1/users/user-1",
+    body: {},
+  });
+});
+
 test("ordinary server is identified only by a missing enterprise route", async () => {
   const absent = createEnterpriseClient(async () => new Response(null, { status: 404 }));
   assert.equal(await absent.bootstrap(), null);
