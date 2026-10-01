@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -81,6 +81,44 @@ test("runtime bindings are case-specific and unhealthy runtimes restart", async 
   assert.deepEqual(events.slice(beforeStaleStop), ["stop-stale:case-c"]);
 });
 
+test("multiple native sessions share one stable customer runtime", async () => {
+  let starts = 0;
+  let stops = 0;
+  const manager = new RuntimeManager({
+    async start(input) {
+      starts += 1;
+      return {
+        id: `customer-runtime-${starts}`,
+        url: `http://127.0.0.1:${4500 + starts}`,
+        workspacePath: input.workspacePath,
+        stop: async () => {
+          stops += 1;
+        },
+      };
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  const firstSessionTarget = {
+    id: "customer-acme",
+    runtimeId: "customer-acme",
+    workspacePath: "/tmp/customers/acme",
+  };
+  const secondSessionTarget = {
+    id: "customer-acme",
+    runtimeId: "customer-acme",
+    workspacePath: "/tmp/customers/acme",
+  };
+  const first = await manager.ensure(firstSessionTarget);
+  const second = await manager.ensure(secondSessionTarget);
+  assert.equal(starts, 1);
+  assert.equal(second.token, first.token);
+  assert.equal(manager.getBinding(secondSessionTarget)?.runtimeId, "customer-acme");
+  await manager.stop(secondSessionTarget);
+  assert.equal(stops, 1);
+});
+
 test("native session binding accepts only a task indexed for that Case workspace", async () => {
   const root = await mkdtemp(join(tmpdir(), "enterprise-runtime-"));
   const dataRoot = join(root, "runtimes");
@@ -106,6 +144,40 @@ test("native session binding accepts only a task indexed for that Case workspace
     await adapter.ownsSession({ id: "case-b", workspacePath: "/tmp/case-b" }, "task-foreign"),
     false,
   );
+});
+
+test("enterprise process runtime passes the managed model marker to native server", async () => {
+  const root = await mkdtemp(join(tmpdir(), "enterprise-runtime-env-"));
+  const markerPath = join(root, "managed-model-marker.txt");
+  const serverEntry = join(root, "server.mjs");
+  await writeFile(
+    serverEntry,
+    [
+      'import { createServer } from "node:http";',
+      'import { writeFile } from "node:fs/promises";',
+      `const markerPath = ${JSON.stringify(markerPath)};`,
+      'await writeFile(markerPath, process.env.ZCODE_ENTERPRISE_MANAGED_MODEL ?? "");',
+      "const server = createServer((request, response) => {",
+      '  if (request.url !== "/api/server-info") { response.writeHead(404); response.end(); return; }',
+      '  response.setHeader("content-type", "application/json");',
+      "  response.end(JSON.stringify({ workspaces: [{ path: process.env.ZCODE_SERVER_WORKSPACE }] }));",
+      "});",
+      'server.listen(Number(process.env.PORT), "127.0.0.1");',
+      'process.on("SIGTERM", () => server.close(() => process.exit(0)));',
+    ].join("\n"),
+  );
+  const adapter = new ProcessRuntimeAdapter({
+    serverEntry,
+    dataRoot: join(root, "runtimes"),
+  });
+  let handle: Awaited<ReturnType<ProcessRuntimeAdapter["start"]>> | undefined;
+  try {
+    handle = await adapter.start({ id: "customer-a", workspacePath: root, token: "test-token" });
+    assert.equal(await readFile(markerPath, "utf8"), "1");
+  } finally {
+    await handle?.stop();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("stopAll waits for an in-flight start and rejects new runtime ensures", async () => {

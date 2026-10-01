@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- 归档视图开关沿用现有 sidebar 结构，先保持同文件收口。 */
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -114,11 +115,13 @@ import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { WorkspaceFileTree } from "@/WorkspaceFileTree.js";
 import { WorkspaceArchivedTasksFlatSection } from "@/WorkspaceArchivedTasksFlatSection.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
+import { WorkspaceSidebarItem } from "@/WorkspaceSidebarItem.js";
 import { WorkspacePinnedTasksSection } from "@/WorkspacePinnedTasksSection.js";
 import { WorkspaceTimelineTasksSection } from "@/WorkspaceTimelineTasksSection.js";
 import { WorkspaceGroupedTasksSection } from "@/WorkspaceGroupedTasksSection.js";
 import { StickyGroupHeaderSlot } from "@/workspace-grouped-tasks/sticky-group-header-slot.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 import {
   SortableWorkspaceSidebarItem,
   restrictVerticalDragWithinContainer,
@@ -152,6 +155,81 @@ function WorkspaceNewTaskTooltip({
     </ControlHintTooltip>
   );
 }
+
+// 企业模式把客户摘要复用为原生 Projects 行；这里只触发 Web 的客户切换回调，
+// 不把客户路径写入原生 workspace tab，确保当前 runtime 仍只有一个实际工作区。
+function EnterpriseCustomerProjectList({
+  context,
+  activeCustomerWorkspaceItem,
+}: {
+  context: EnterpriseRootContext;
+  activeCustomerWorkspaceItem?: ReactNode;
+}) {
+  const { intl } = useZCodeIntl();
+  const [switchingCustomerId, setSwitchingCustomerId] = useState<string | null>(null);
+
+  const handleCustomerChange = useCallback(
+    (customerId: string) => {
+      if (customerId === context.activeCustomerId || switchingCustomerId) {
+        return;
+      }
+      setSwitchingCustomerId(customerId);
+      Promise.resolve()
+        .then(() => context.onSelectCustomer(customerId))
+        .catch((error) => {
+          logger.warn("[WorkspaceSidebar] 企业客户切换失败", {
+            customerId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => setSwitchingCustomerId(null));
+    },
+    [context, switchingCustomerId],
+  );
+
+  return (
+    <ul
+      data-testid={TID_WORKSPACE_LIST}
+      data-enterprise-customer-project-list="true"
+      aria-label={intl.formatMessage({ id: "enterprise.switchCustomer" })}
+      className="space-y-2 pb-4"
+    >
+      {context.customers.map((customer) => {
+        const isActiveCustomer = customer.id === context.activeCustomerId;
+        if (isActiveCustomer && activeCustomerWorkspaceItem) {
+          // 当前客户直接复用原生 workspace 行，任务子项、归档、更多操作和加载态都沿用
+          // 原实现；其他客户只保留授权摘要和切换回调，避免把其他 runtime 注入原生 tabs。
+          return <Fragment key={customer.id}>{activeCustomerWorkspaceItem}</Fragment>;
+        }
+        return (
+          <li key={customer.id}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="default"
+              className={cn(
+                "w-full min-w-0 justify-start gap-2 rounded-lg pl-2.5 pr-1 text-left text-foreground-subtle hover:bg-surface-hover hover:text-foreground",
+                isActiveCustomer && "bg-selected text-foreground",
+              )}
+              aria-current={isActiveCustomer ? "page" : undefined}
+              data-customer-id={customer.id}
+              disabled={switchingCustomerId !== null}
+              onClick={() => handleCustomerChange(customer.id)}
+            >
+              {isActiveCustomer ? (
+                <FolderOpen className="size-4 shrink-0 text-foreground-subtle" />
+              ) : (
+                <Folder className="size-4 shrink-0 text-foreground-subtle" />
+              )}
+              <span className="min-w-0 flex-1 truncate">{customer.name}</span>
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export { applyWorkspaceTriggerSelection } from "@/WorkspaceSidebar/workspaceSidebarSelection.js";
 export { WorkspaceSidebarCollapsedRail } from "@/WorkspaceSidebar/WorkspaceSidebarCollapsedRail.js";
 
@@ -241,6 +319,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
   onLogout,
   onLogin,
   user,
+  enterpriseContext,
+  enterpriseManagedModel = false,
   reconnectingRemoteWorkspaceKeys,
   remoteWorkspaceErrorByWorkspaceKey,
   reconnectingRemoteWorkspaceLogsByWorkspaceKey = EMPTY_RECONNECTING_REMOTE_WORKSPACE_LOGS_BY_WORKSPACE_KEY,
@@ -293,6 +373,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
   onLogout?: () => void;
   onLogin?: () => void;
   user?: UserInfo | null;
+  enterpriseContext?: EnterpriseRootContext;
+  enterpriseManagedModel?: boolean;
   reconnectingRemoteWorkspaceKeys: string[];
   remoteWorkspaceErrorByWorkspaceKey: Record<string, string>;
   reconnectingRemoteWorkspaceLogsByWorkspaceKey?: Record<string, RemoteConnectionLogEntry[]>;
@@ -645,6 +727,38 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
       ),
     [workspaceTaskLists.groups],
   );
+  const enterpriseActiveWorkspaceTab = useMemo(() => {
+    if (!enterpriseContext) {
+      return null;
+    }
+
+    const activeWorkspaceKey = buildTaskWorkspaceKey(workspacePath, workspaceIdentity);
+    return (
+      projectWorkspaceTabs.find(
+        (tab) =>
+          buildTaskWorkspaceKey(tab.workspacePath, tab.workspaceIdentity) === activeWorkspaceKey,
+      ) ?? null
+    );
+  }, [enterpriseContext, projectWorkspaceTabs, workspaceIdentity, workspacePath]);
+  const enterpriseActiveWorkspaceTaskGroup = enterpriseActiveWorkspaceTab
+    ? (workspaceTaskGroupByKey.get(
+        buildTaskWorkspaceKey(
+          enterpriseActiveWorkspaceTab.workspacePath,
+          enterpriseActiveWorkspaceTab.workspaceIdentity,
+        ),
+      ) ?? null)
+    : null;
+  const enterpriseActiveCustomerWorkspaceLabel = useMemo(() => {
+    if (!enterpriseContext || !enterpriseContext.activeCustomerId) {
+      return undefined;
+    }
+
+    return (
+      enterpriseContext.customers
+        .find((customer) => customer.id === enterpriseContext.activeCustomerId)
+        ?.name.trim() || intl.formatMessage({ id: "enterprise.customer" })
+    );
+  }, [enterpriseContext, intl]);
   const handleShowMoreWorkspaceTasks = useCallback((workspaceKey: string) => {
     setWorkspaceTaskVisibleLimitByKey((current) =>
       increaseWorkspaceTaskVisibleLimit(current, workspaceKey),
@@ -676,6 +790,64 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
       maskSize: "100% 100%",
     };
   }, [showWorkspaceBottomMask, showWorkspaceTopMask]);
+
+  const enterpriseActiveCustomerWorkspaceItem =
+    enterpriseActiveWorkspaceTab && enterpriseActiveCustomerWorkspaceLabel ? (
+      <WorkspaceSidebarItem
+        tab={enterpriseActiveWorkspaceTab}
+        isActiveWorkspace={
+          buildTaskWorkspaceKey(
+            enterpriseActiveWorkspaceTab.workspacePath,
+            enterpriseActiveWorkspaceTab.workspaceIdentity,
+          ) === buildTaskWorkspaceKey(workspacePath, workspaceIdentity)
+        }
+        isExpanded={expandedWorkspacePaths.has(enterpriseActiveWorkspaceTab.workspacePath)}
+        activateTab={activateTab}
+        closeTab={closeTab}
+        toggleWorkspaceExpanded={toggleWorkspaceExpanded}
+        onSelectTask={onSelectTask}
+        onStartDraftInWorkspace={onStartDraftInWorkspace}
+        taskItems={enterpriseActiveWorkspaceTaskGroup?.items ?? EMPTY_WORKSPACE_TASK_ITEMS}
+        taskListLoading={
+          workspaceTaskLists.loadingByWorkspaceKey[
+            buildTaskWorkspaceKey(
+              enterpriseActiveWorkspaceTab.workspacePath,
+              enterpriseActiveWorkspaceTab.workspaceIdentity,
+            )
+          ] ?? false
+        }
+        taskListHasMore={enterpriseActiveWorkspaceTaskGroup?.hasMore ?? false}
+        taskListHasUnread={enterpriseActiveWorkspaceTaskGroup?.hasUnread ?? false}
+        taskListLiveWorkflowCount={enterpriseActiveWorkspaceTaskGroup?.liveWorkflowCount ?? 0}
+        workspaceDisplayLabel={enterpriseActiveCustomerWorkspaceLabel}
+        onShowMoreTasks={() =>
+          handleShowMoreWorkspaceTasks(
+            buildTaskWorkspaceKey(
+              enterpriseActiveWorkspaceTab.workspacePath,
+              enterpriseActiveWorkspaceTab.workspaceIdentity,
+            ),
+          )
+        }
+        reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
+        remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
+        reconnectingRemoteWorkspaceLogsByWorkspaceKey={
+          reconnectingRemoteWorkspaceLogsByWorkspaceKey
+        }
+        onReconnectRemoteWorkspace={onReconnectRemoteWorkspace}
+        onOpenFileTree={handleOpenWorkspaceFileTree}
+      />
+    ) : null;
+
+  // 企业 runtime 内只有客户工作区这一个 workspace；原生侧边栏的独立“任务”分区
+  // (conversation workspace)会在容器里另建一个 app 管理的对话工作区，脱离客户工作区，
+  // 与“任务都从客户工作区创建”的产品规则冲突，因此企业模式不渲染该分区。
+  const visiblePurposeSectionIds = useMemo(
+    () =>
+      enterpriseContext
+        ? purposeSectionPreferences.sectionOrder.filter((id) => id !== "conversations")
+        : purposeSectionPreferences.sectionOrder,
+    [enterpriseContext, purposeSectionPreferences.sectionOrder],
+  );
 
   const resetWorkspaceDrag = useCallback(() => {
     setActiveWorkspaceDragId(null);
@@ -1384,6 +1556,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
                     activeWorkspaceIdentity={workspaceIdentity}
                     activeTaskId={activeTaskId}
                     sortBy={taskSortBy}
+                    workspaceDisplayLabel={enterpriseActiveCustomerWorkspaceLabel}
+                    useWorkspaceTaskService={Boolean(enterpriseContext)}
                     onSelectTask={onSelectTask}
                   />
                 ) : taskViewMode === "grouped" ? (
@@ -1423,11 +1597,11 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
                     onDragEnd={handlePurposeSectionDragEnd}
                   >
                     <SortableContext
-                      items={purposeSectionPreferences.sectionOrder}
+                      items={visiblePurposeSectionIds}
                       strategy={verticalListSortingStrategy}
                     >
                       <div data-purpose-section-list="true">
-                        {purposeSectionPreferences.sectionOrder.map((sectionId) =>
+                        {visiblePurposeSectionIds.map((sectionId) =>
                           sectionId === "projects" ? (
                             <WorkspacePurposeSection
                               key={sectionId}
@@ -1447,47 +1621,56 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
                               onOpenChange={handleProjectSectionOpenChange}
                               testId={TID_PROJECT_SECTION}
                               action={
-                                <DropdownMenu>
-                                  <ControlHintTooltip
-                                    title={intl.formatMessage({
-                                      id: "workspaceSidebar.addProject",
-                                    })}
-                                  >
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon-sm"
-                                        className="text-foreground-subtle hover:text-foreground data-[state=open]:text-foreground"
-                                        aria-label={intl.formatMessage({
-                                          id: "workspaceSidebar.addProject",
-                                        })}
-                                        data-testid={TID_PROJECT_ADD}
-                                      >
-                                        <Plus className="size-3.5" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                  </ControlHintTooltip>
-                                  <DropdownMenuContent align="end" className="min-w-44">
-                                    <DropdownMenuItem onSelect={onOpenFolderFromWorkspaceMenu}>
-                                      <FolderOpen className="size-4" />
-                                      {intl.formatMessage({
-                                        id: "workspace.openFolder",
+                                enterpriseContext ? null : (
+                                  <DropdownMenu>
+                                    <ControlHintTooltip
+                                      title={intl.formatMessage({
+                                        id: "workspaceSidebar.addProject",
                                       })}
-                                    </DropdownMenuItem>
-                                    {onOpenRemoteWorkspace ? (
-                                      <DropdownMenuItem onSelect={onOpenRemoteWorkspace}>
-                                        <Cloud className="size-4" />
+                                    >
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="icon-sm"
+                                          className="text-foreground-subtle hover:text-foreground data-[state=open]:text-foreground"
+                                          aria-label={intl.formatMessage({
+                                            id: "workspaceSidebar.addProject",
+                                          })}
+                                          data-testid={TID_PROJECT_ADD}
+                                        >
+                                          <Plus className="size-3.5" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                    </ControlHintTooltip>
+                                    <DropdownMenuContent align="end" className="min-w-44">
+                                      <DropdownMenuItem onSelect={onOpenFolderFromWorkspaceMenu}>
+                                        <FolderOpen className="size-4" />
                                         {intl.formatMessage({
-                                          id: "remote.trigger",
+                                          id: "workspace.openFolder",
                                         })}
                                       </DropdownMenuItem>
-                                    ) : null}
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
+                                      {onOpenRemoteWorkspace ? (
+                                        <DropdownMenuItem onSelect={onOpenRemoteWorkspace}>
+                                          <Cloud className="size-4" />
+                                          {intl.formatMessage({
+                                            id: "remote.trigger",
+                                          })}
+                                        </DropdownMenuItem>
+                                      ) : null}
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                )
                               }
                             >
-                              {projectWorkspaceTabs.length === 0 ? (
+                              {enterpriseContext ? (
+                                <EnterpriseCustomerProjectList
+                                  context={enterpriseContext}
+                                  activeCustomerWorkspaceItem={
+                                    enterpriseActiveCustomerWorkspaceItem
+                                  }
+                                />
+                              ) : projectWorkspaceTabs.length === 0 ? (
                                 <div className="px-3 py-2 text-ui-base text-foreground-subtle">
                                   {intl.formatMessage({
                                     id: "workspaceSidebar.noProjects",
@@ -1654,6 +1837,8 @@ export const WorkspaceSidebar = memo(function WorkspaceSidebarComponent({
             onLogin={onLogin}
             onLogout={onLogout}
             user={user}
+            enterpriseContext={enterpriseContext}
+            enterpriseManagedModel={enterpriseManagedModel}
             workspacePath={workspacePath}
             workspaceIdentity={workspaceIdentity}
             workspaceRemoteSessionId={workspaceRemoteSessionId}

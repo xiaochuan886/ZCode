@@ -8,47 +8,62 @@ export interface Tenant {
   name: string;
   role?: "admin" | "member";
 }
+export type ModelApiType = "anthropic-messages" | "openai-chat-completions";
+export interface ModelCredentialInput {
+  providerName?: string;
+  apiType: ModelApiType;
+  baseUrl: string;
+  modelId: string;
+  apiKey: string;
+}
+export function isCompleteModelCredentialInput(input: ModelCredentialInput): boolean {
+  return Boolean(
+    (input.apiType === "anthropic-messages" || input.apiType === "openai-chat-completions") &&
+    input.baseUrl.trim() &&
+    input.modelId.trim() &&
+    input.apiKey.trim(),
+  );
+}
 export interface ModelCredentialStatus {
   tenantId: string;
-  providerFamily: "zai-api" | "bigmodel-api";
+  providerFamily: "custom";
+  /** Metadata is optional for rows created before the generic provider migration. */
+  providerName?: string;
+  apiType?: ModelApiType;
+  baseUrl?: string;
+  modelId?: string;
   status: "configured" | "revoked";
   configured: boolean;
   lastFour: string | null;
   updatedAt: string;
 }
-export interface ServiceSpace {
+export interface Customer {
   id: string;
+  tenantId?: string;
+  name: string;
+  type?: string;
+  metadata?: Record<string, unknown>;
+  workspacePath?: string;
+  workspaceIdentity?: string;
+}
+export interface ActiveCustomer {
+  id: string;
+  name: string;
+  workspacePath: string;
+  workspaceIdentity?: string;
+}
+export interface CustomerDraft {
   tenantId: string;
   name: string;
-}
-export interface ServiceObject {
-  id: string;
-  serviceSpaceId: string;
-  name: string;
-  type: string;
-}
-export interface EnterpriseCase {
-  id: string;
-  title: string;
-  category: string;
-  status: string;
-  serviceSpaceId: string;
-  serviceObject: { id: string; name: string; type: string };
-  workspacePath: string;
-  sessionId?: string;
+  type?: string;
+  metadata?: Record<string, unknown>;
 }
 export interface EnterpriseBootstrap {
   enabled: true;
   user: EnterpriseUser | null;
   tenants: Tenant[];
-  activeCase: EnterpriseCase | null;
+  activeCustomer: ActiveCustomer | null;
   csrfToken: string | null;
-}
-export interface CaseDraft {
-  serviceSpaceId: string;
-  serviceObjectId: string;
-  title: string;
-  category: string;
 }
 export class EnterpriseApiError extends Error {
   readonly status: number;
@@ -58,45 +73,13 @@ export class EnterpriseApiError extends Error {
     this.status = status;
   }
 }
-export function isCompleteCaseDraft(draft: CaseDraft): boolean {
-  return Boolean(
-    draft.serviceSpaceId.trim() &&
-    draft.serviceObjectId.trim() &&
-    draft.title.trim() &&
-    draft.category.trim(),
-  );
-}
-export function statusChoices(status: string): string[] {
-  const next: Record<string, string[]> = {
-    open: ["in_progress"],
-    in_progress: ["resolved"],
-    resolved: ["closed", "in_progress"],
-    closed: ["in_progress"],
-  };
-  return [status, ...(next[status] ?? [])];
+export function isCompleteCustomerDraft(draft: Pick<CustomerDraft, "tenantId" | "name">): boolean {
+  return Boolean(draft.tenantId.trim() && draft.name.trim());
 }
 
 type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 function records<T>(value: T[] | { items: T[] }): T[] {
   return Array.isArray(value) ? value : value.items;
-}
-function normalizeCase(
-  value: EnterpriseCase & {
-    serviceObjectId?: string;
-    objectSnapshot?: { name: string; type: string };
-    nativeSessionId?: string | null;
-  },
-): EnterpriseCase {
-  if (value.serviceObject) return value;
-  return {
-    ...value,
-    serviceObject: {
-      id: value.serviceObjectId ?? "",
-      name: value.objectSnapshot?.name ?? "",
-      type: value.objectSnapshot?.type ?? "",
-    },
-    ...(value.nativeSessionId ? { sessionId: value.nativeSessionId } : {}),
-  };
 }
 export function createEnterpriseClient(fetcher: Fetch = fetch) {
   async function request<T>(
@@ -138,72 +121,47 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
       if (!response.ok) throw new Error(`Enterprise bootstrap failed (${response.status})`);
       const body = (await response.json()) as EnterpriseBootstrap;
       if (body.enabled !== true) return null;
-      return { ...body, activeCase: body.activeCase ? normalizeCase(body.activeCase) : null };
+      return {
+        ...body,
+        activeCustomer: body.activeCustomer ?? null,
+      };
     },
     login: (email: string, password: string, token: string | null) =>
       post<void>("/login", { email, password }, token),
     logout: (token: string | null) => post<void>("/logout", {}, token),
-    spaces: async (tenantId: string) =>
+    customers: async (tenantId: string) =>
       records(
-        await request<ServiceSpace[] | { items: ServiceSpace[] }>(
-          `/spaces?tenantId=${encodeURIComponent(tenantId)}`,
+        await request<Customer[] | { items: Customer[] }>(
+          `/customers?tenantId=${encodeURIComponent(tenantId)}`,
         ),
       ),
-    createSpace: (tenantId: string, name: string, token: string | null) =>
-      post<ServiceSpace>("/spaces", { tenantId, name }, token),
-    objects: async (serviceSpaceId: string) =>
-      records(
-        await request<ServiceObject[] | { items: ServiceObject[] }>(
-          `/objects?serviceSpaceId=${encodeURIComponent(serviceSpaceId)}`,
-        ),
+    createCustomer: (draft: CustomerDraft, token: string | null) =>
+      post<Customer>(
+        "/customers",
+        {
+          tenantId: draft.tenantId,
+          name: draft.name.trim(),
+          ...(draft.type?.trim() ? { type: draft.type.trim() } : {}),
+          metadata: draft.metadata ?? {},
+        },
+        token,
       ),
-    createObject: (serviceSpaceId: string, name: string, type: string, token: string | null) =>
-      post<ServiceObject>("/objects", { serviceSpaceId, name, type, metadata: {} }, token),
-    cases: async (serviceSpaceId: string) =>
-      records(
-        await request<EnterpriseCase[] | { items: EnterpriseCase[] }>(
-          `/cases?serviceSpaceId=${encodeURIComponent(serviceSpaceId)}`,
-        ),
-      ).map(normalizeCase),
-    createCase: (draft: CaseDraft, token: string | null) =>
-      post<EnterpriseCase>("/cases", { ...draft, contextSnapshot: {} }, token),
-    activateCase: (id: string, token: string | null) =>
-      post<void>(`/cases/${encodeURIComponent(id)}/activate`, {}, token),
+    activateCustomer: (id: string, token: string | null) =>
+      post<void>(`/customers/${encodeURIComponent(id)}/activate`, {}, token),
     modelCredentials: (tenantId: string) =>
       request<ModelCredentialStatus[]>(
         `/tenants/${encodeURIComponent(tenantId)}/model-credentials`,
       ),
-    saveModelCredential: (
-      tenantId: string,
-      providerFamily: ModelCredentialStatus["providerFamily"],
-      apiKey: string,
-      token: string | null,
-    ) =>
+    saveModelCredential: (tenantId: string, input: ModelCredentialInput, token: string | null) =>
       request<ModelCredentialStatus>(
-        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/${providerFamily}`,
-        { method: "PUT", body: JSON.stringify({ apiKey }) },
+        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/custom`,
+        { method: "PUT", body: JSON.stringify(input) },
         token,
       ),
-    revokeModelCredential: (
-      tenantId: string,
-      providerFamily: ModelCredentialStatus["providerFamily"],
-      token: string | null,
-    ) =>
+    revokeModelCredential: (tenantId: string, token: string | null) =>
       request<ModelCredentialStatus>(
-        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/${providerFamily}`,
+        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/custom`,
         { method: "DELETE" },
-        token,
-      ),
-    bindSession: (id: string, sessionId: string, token: string | null, signal?: AbortSignal) =>
-      request<void>(
-        `/cases/${encodeURIComponent(id)}/session`,
-        { method: "POST", body: JSON.stringify({ sessionId }), signal },
-        token,
-      ),
-    updateCaseStatus: (id: string, status: string, token: string | null) =>
-      request<EnterpriseCase>(
-        `/cases/${encodeURIComponent(id)}/status`,
-        { method: "PATCH", body: JSON.stringify({ status }) },
         token,
       ),
   };

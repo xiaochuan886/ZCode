@@ -37,6 +37,8 @@ interface RootWorkspaceContentProps {
   handleLogout?: () => void;
   onLogin?: () => void;
   user: AppProps["user"];
+  enterpriseContext: AppProps["enterpriseContext"];
+  enterpriseManagedModel: AppProps["enterpriseManagedModel"];
   reconnectingRemoteWorkspaceKeys: AppProps["reconnectingRemoteWorkspaceKeys"];
   remoteWorkspaceErrorByWorkspaceKey: AppProps["remoteWorkspaceErrorByWorkspaceKey"];
   reconnectingRemoteWorkspaceLogsByWorkspaceKey: AppProps["reconnectingRemoteWorkspaceLogsByWorkspaceKey"];
@@ -75,6 +77,8 @@ export function RootWorkspaceContent({
   handleLogout,
   onLogin,
   user,
+  enterpriseContext,
+  enterpriseManagedModel,
   reconnectingRemoteWorkspaceKeys,
   remoteWorkspaceErrorByWorkspaceKey,
   reconnectingRemoteWorkspaceLogsByWorkspaceKey,
@@ -146,6 +150,8 @@ export function RootWorkspaceContent({
                 onLogout={handleLogout}
                 onLogin={onLogin}
                 user={user}
+                enterpriseContext={enterpriseContext}
+                enterpriseManagedModel={enterpriseManagedModel}
                 reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
                 remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
                 reconnectingRemoteWorkspaceLogsByWorkspaceKey={
@@ -199,6 +205,8 @@ export function RootWorkspaceContent({
             onLogin={onLogin}
             onLogout={handleLogout}
             user={user}
+            enterpriseContext={enterpriseContext}
+            enterpriseManagedModel={enterpriseManagedModel}
           />
         </ScopedErrorBoundary>
       ) : null}

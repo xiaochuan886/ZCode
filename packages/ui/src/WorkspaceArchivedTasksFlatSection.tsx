@@ -28,6 +28,8 @@ export function WorkspaceArchivedTasksFlatSection({
   activeTaskId,
   sortBy,
   actionsContainer,
+  workspaceDisplayLabel,
+  useWorkspaceTaskService = false,
   onSelectTask,
 }: {
   workspaceTabs: WorkspaceTabState[];
@@ -36,6 +38,8 @@ export function WorkspaceArchivedTasksFlatSection({
   activeTaskId: string | null;
   sortBy: "created" | "updated";
   actionsContainer?: HTMLElement | null;
+  workspaceDisplayLabel?: string;
+  useWorkspaceTaskService?: boolean;
   onSelectTask: (
     targetWorkspacePath: string,
     taskId: string,
@@ -63,6 +67,7 @@ export function WorkspaceArchivedTasksFlatSection({
   const [showAllTasks, setShowAllTasks] = useState(false);
   const [deletingTaskKeys, setDeletingTaskKeys] = useState<Set<string>>(() => new Set());
   const collapsedLimit = 20;
+  const normalizedWorkspaceDisplayLabel = workspaceDisplayLabel?.trim();
   const workspaceLabelByKey = useMemo(
     () =>
       new Map(
@@ -70,17 +75,30 @@ export function WorkspaceArchivedTasksFlatSection({
           (tab) =>
             [
               buildTaskWorkspaceKey(tab.workspacePath, tab.workspaceIdentity),
-              tab.label || getPathLeaf(tab.workspacePath),
+              normalizedWorkspaceDisplayLabel || tab.label || getPathLeaf(tab.workspacePath),
             ] as const,
         ),
       ),
-    [workspaceTabs],
+    [normalizedWorkspaceDisplayLabel, workspaceTabs],
   );
 
-  const workspaceServiceLookup = useMemo(
-    () => buildWorkspaceServiceLookup(workspaceTabs, baseServices, serviceResolverState),
-    [baseServices, serviceResolverState, workspaceTabs],
-  );
+  const workspaceServiceLookup = useMemo(() => {
+    const resolved = buildWorkspaceServiceLookup(workspaceTabs, baseServices, serviceResolverState);
+    if (!useWorkspaceTaskService) {
+      return resolved;
+    }
+
+    // Enterprise customer workspace 由当前 Web runtime 提供；即使后端为客户设置了
+    // workspaceIdentity，也不能按普通远端 tab 等待 remote session，否则已读到的归档行会
+    // 在渲染前被过滤掉。enterprise root 禁止远端 workspace，因此这里明确映射到 base service。
+    for (const tab of workspaceTabs) {
+      const key = buildTaskWorkspaceKey(tab.workspacePath, tab.workspaceIdentity);
+      if (!resolved.has(key)) {
+        resolved.set(key, { services: baseServices, isRemoteWorkspace: false });
+      }
+    }
+    return resolved;
+  }, [baseServices, serviceResolverState, useWorkspaceTaskService, workspaceTabs]);
   const activeWorkspaceKey = buildTaskWorkspaceKey(activeWorkspacePath, activeWorkspaceIdentity);
   const { items, total, loading, syncingRemoteWorkspaces, refresh } = useGlobalTaskList({
     kind: "archived",
@@ -89,6 +107,7 @@ export function WorkspaceArchivedTasksFlatSection({
     searchQuery: "",
     expanded: showAllTasks,
     collapsedLimit,
+    useWorkspaceTaskService,
   });
   const canToggleExpanded = total > collapsedLimit;
 
@@ -243,6 +262,7 @@ export function WorkspaceArchivedTasksFlatSection({
                             previousState: { pinned: false, archived: true },
                             nextState: { pinned: false, archived: false },
                           });
+                          return refresh();
                         })
                         .catch((error) => {
                           logger.error(
@@ -309,6 +329,7 @@ export function WorkspaceArchivedTasksFlatSection({
                               workspaceIdentity: task.workspaceIdentity,
                               taskId: task.taskId,
                             });
+                            await refresh();
                           } catch (error) {
                             logger.error(
                               "[WorkspaceArchivedTasksFlatSection] 删除归档 task 失败:",

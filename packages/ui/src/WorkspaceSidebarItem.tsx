@@ -141,6 +141,7 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
   taskListHasMore,
   taskListHasUnread = false,
   taskListLiveWorkflowCount = 0,
+  workspaceDisplayLabel,
   onShowMoreTasks,
   reconnectingRemoteWorkspaceKeys,
   remoteWorkspaceErrorByWorkspaceKey,
@@ -170,6 +171,8 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
   taskListHasUnread?: boolean;
   /** 组内在跑的工作流 run 数；项目收起时在未读点旁画脉冲灯（>1 带数量）。 */
   taskListLiveWorkflowCount?: number;
+  /** 企业客户 workspace 的展示名；不参与 workspace identity/path 匹配。 */
+  workspaceDisplayLabel?: string;
   onShowMoreTasks: () => void;
   reconnectingRemoteWorkspaceKeys: string[];
   remoteWorkspaceErrorByWorkspaceKey: Record<string, string>;
@@ -232,7 +235,10 @@ export const WorkspaceSidebarItem = memo(function WorkspaceSidebarItem({
     isDisconnectedRemoteWorkspace && reconnectingRemoteWorkspaceKeys.includes(remoteWorkspaceKey),
   );
   const remoteWorkspaceError = remoteWorkspaceErrorByWorkspaceKey[remoteWorkspaceKey];
-  const workspaceSidebarLabel = formatRemoteWorkspaceDisplayLabel(tab.label, tab.remoteTarget);
+  // 企业客户 workspace 仍复用原生行和任务子列表，但展示客户名，避免把服务端路径/UUID
+  // 暴露给专家；workspace identity 和文件路径继续从 tab 读取。
+  const workspaceSidebarLabel =
+    workspaceDisplayLabel?.trim() || formatRemoteWorkspaceDisplayLabel(tab.label, tab.remoteTarget);
   const sshWorkspaceTooltipDetails = getSshWorkspaceTooltipDetails(tab);
   const reconnectRuntimeLogs =
     reconnectingRemoteWorkspaceLogsByWorkspaceKey[remoteWorkspaceKey] ?? [];

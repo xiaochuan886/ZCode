@@ -237,12 +237,15 @@ export function ModelProviderSection({
   connectivityWorkspaceRequired = false,
   pendingModelProviderTarget,
   onConsumePendingModelProviderTarget,
+  enterpriseOnlyCustomProviders = false,
 }: {
   workspacePath?: string;
   connectivityWorkspacePath?: string;
   connectivityWorkspaceRequired?: boolean;
   pendingModelProviderTarget?: SettingsModelProviderTarget;
   onConsumePendingModelProviderTarget?: () => void;
+  /** 企业控制面只暴露自定义供应商，隐藏原生 Z.ai/套餐入口。 */
+  enterpriseOnlyCustomProviders?: boolean;
 } = {}) {
   const { intl, locale } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
@@ -692,6 +695,7 @@ export function ModelProviderSection({
       connectionSelections: effectiveConnectionSelections,
       pendingConnectionSelections,
       showPurchasedTeamPlanFallback,
+      enterpriseOnlyCustomProviders,
       familyConnectionSettingsLoading: sharedSettingsLoading && sharedSettings === null,
       familyConnectionSettingsFailed,
       selectedNodeKey,
@@ -1086,6 +1090,7 @@ export function ModelProviderSection({
       {templatePickerOpen ? (
         <ProviderTemplatePicker
           templates={providerTemplates}
+          customOnly={enterpriseOnlyCustomProviders}
           creating={creatingProvider}
           onBack={() => setTemplatePickerOpen(false)}
           onCreateFromTemplate={(templateId) => {

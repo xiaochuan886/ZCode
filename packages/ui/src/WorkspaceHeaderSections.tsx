@@ -79,6 +79,7 @@ export function WorkspaceHeaderTitleSection({
   remoteTarget,
   localWorkspacePath,
   projectName,
+  workspaceDisplayLabel: workspaceDisplayLabelOverride,
   activeTaskTitle,
   activeTaskChangeSummary: _activeTaskChangeSummary,
   activeTaskId,
@@ -183,7 +184,10 @@ export function WorkspaceHeaderTitleSection({
   const remoteWorkspaceHostLabel = remoteTarget
     ? formatRemoteWorkspaceHeaderHostLabel(remoteTarget)
     : null;
-  const workspaceDisplayLabel = formatRemoteWorkspaceDisplayLabel(projectName, remoteTarget);
+  // 企业模式用客户名替换 header 的路径/UUID 展示，workspace identity/path 仍沿用原始参数。
+  const workspaceDisplayLabel =
+    workspaceDisplayLabelOverride?.trim() ||
+    formatRemoteWorkspaceDisplayLabel(projectName, remoteTarget);
   const showRemoteWorkspaceHostLabel = Boolean(
     remoteWorkspaceHostLabel && workspaceDisplayLabel === projectName,
   );

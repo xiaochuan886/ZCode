@@ -7,7 +7,7 @@ import {
 } from "node:http";
 import { createConnection, type AddressInfo, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -172,7 +172,7 @@ test("browser cannot reach privileged native routes or ambiguous encoded paths",
   assert.equal(nativeTarget("/api/server-info?x=1", binding).origin, binding.url);
 });
 
-test("admins provision users atomically and rename only their tenant's ServiceSpaces", async () => {
+test("admins provision users atomically and customer updates stay tenant-scoped", async () => {
   const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-admin-"));
   await writeFile(join(dir, "index.html"), "ready");
   const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "cases"));
@@ -188,8 +188,8 @@ test("admins provision users atomically and rename only their tenant's ServiceSp
     "other-admin@example.test",
     hash,
   );
-  const foreignSpace = store.createServiceSpace(foreignAdmin.id, foreignTenant.id, {
-    name: "Foreign space",
+  const foreignCustomer = await store.createCustomer(foreignAdmin.id, foreignTenant.id, {
+    name: "Foreign customer",
   });
   let starts = 0;
   const gateway = createEnterpriseGateway({
@@ -259,39 +259,19 @@ test("admins provision users atomically and rename only their tenant's ServiceSp
       [tenant.id],
     );
 
-    response = await api(base, adminSession, "/api/enterprise/spaces", "POST", {
-      tenantId: tenant.id,
-      name: "Support",
-    });
-    assert.equal(response.status, 201);
-    const space = (await response.json()) as { id: string; tenantId: string; name: string };
-    const object = store.createServiceObject(admin.id, space.id, {
-      name: "Widget",
-      type: "product",
-    });
-    const value = store.createCase(admin.id, object.id, { title: "Inspect widget" });
-    response = await api(base, adminSession, `/api/enterprise/spaces/${space.id}`, "PATCH", {
-      name: "Customer Support",
-    });
-    assert.equal(response.status, 200);
-    const renamed = (await response.json()) as { id: string; tenantId: string; name: string };
-    assert.equal(renamed.id, space.id);
-    assert.equal(renamed.tenantId, tenant.id);
-    assert.equal(renamed.name, "Customer Support");
-    assert.equal(store.getCase(admin.id, value.id).serviceSpaceId, space.id);
-
-    response = await api(base, memberSession, `/api/enterprise/spaces/${space.id}`, "PATCH", {
+    const customer = await store.createCustomer(admin.id, tenant.id, { name: "Support" });
+    response = await api(base, memberSession, `/api/enterprise/customers/${customer.id}`, "PATCH", {
       name: "Member rename",
     });
     assert.equal(response.status, 403);
-    response = await api(base, foreignSession, `/api/enterprise/spaces/${space.id}`, "PATCH", {
+    response = await api(base, foreignSession, `/api/enterprise/customers/${customer.id}`, "PATCH", {
       name: "Cross tenant",
     });
     assert.equal(response.status, 404);
     response = await api(
       base,
       foreignSession,
-      `/api/enterprise/spaces/${foreignSpace.id}`,
+      `/api/enterprise/customers/${foreignCustomer.id}`,
       "PATCH",
       { name: "Foreign renamed" },
     );
@@ -307,6 +287,235 @@ test("admins provision users atomically and rename only their tenant's ServiceSp
   } finally {
     await gateway.close();
     store.close();
+  }
+});
+
+test("tenant model API accepts one custom connection and never returns its key", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-model-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: Buffer.alloc(32, 0x42),
+  });
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "model-admin@example.test", hash);
+  const member = store.provisionUser(user.id, tenant.id, {
+    email: "model-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const adminSession = await login(base, user.email);
+    const memberSession = await login(base, member.user.email);
+    let response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials`,
+      "GET",
+    );
+    assert.deepEqual(await response.json(), []);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
+      "PUT",
+      {
+        providerName: "Acme AI",
+        apiType: "openai-chat-completions",
+        baseUrl: "https://api.example.com/v1",
+        modelId: "acme-model",
+        apiKey: "server-secret-1234",
+      },
+    );
+    assert.equal(response.status, 200);
+    const saved = (await response.json()) as Record<string, unknown>;
+    assert.equal(saved.providerName, "Acme AI");
+    assert.equal(saved.modelId, "acme-model");
+    assert.equal("apiKey" in saved, false);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const memberStatus = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(memberStatus[0]?.configured, true);
+    assert.equal("apiKey" in (memberStatus[0] ?? {}), false);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
+      "PUT",
+      {
+        providerName: "Denied",
+        apiType: "openai-chat-completions",
+        baseUrl: "https://api.example.com/v1",
+        modelId: "denied",
+        apiKey: "member-secret",
+      },
+    );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials/zai-api`,
+      "PUT",
+      {
+        apiType: "anthropic-messages",
+        baseUrl: "https://api.example.com",
+        modelId: "zai-hidden",
+        apiKey: "hidden-secret",
+      },
+    );
+    assert.equal(response.status, 404);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
+      "DELETE",
+    );
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { configured: boolean }).configured, false);
+  } finally {
+    await gateway.close();
+    store.close();
+  }
+});
+
+test("customer routes activate one stable workspace per customer", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-customer-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "customer-admin@example.test", hash);
+  const customer = await store.createCustomer(user.id, tenant.id, {
+    name: "Acme",
+    type: "account",
+  });
+  let starts = 0;
+  let stops = 0;
+  const runtimes = new RuntimeManager({
+    async start(input) {
+      starts += 1;
+      return {
+        id: `fake-${input.id}`,
+        url: "http://127.0.0.1:9",
+        workspacePath: input.workspacePath,
+        stop: async () => {
+          stops += 1;
+        },
+      };
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes,
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await login(base, user.email);
+    let response = await api(
+      base,
+      browser,
+      `/api/enterprise/customers?tenantId=${tenant.id}`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const listed = (await response.json()) as Array<{ id: string }>;
+    assert.deepEqual(
+      listed.map((item) => item.id),
+      [customer.id],
+    );
+    response = await api(base, browser, "/api/enterprise/customers", "POST", {
+      tenantId: tenant.id,
+      name: "Beta",
+    });
+    assert.equal(response.status, 201);
+    const created = (await response.json()) as { id: string; type: string };
+    assert.equal(created.type, "");
+    response = await api(base, browser, `/api/enterprise/customers/${created.id}`, "PATCH", {
+      name: "Beta",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { type: string }).type, "");
+    response = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${created.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    assert.equal(starts, 1);
+    assert.equal(stops, 0);
+    // Repeating the same activation must retain the healthy Customer runtime
+    // and any native sessions attached to it.
+    response = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${created.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    assert.equal(starts, 1);
+    assert.equal(stops, 0);
+    // Switching targets still runs the target preparation path. Switching
+    // back to the already-running Customer proves that path can replace it.
+    response = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${customer.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    assert.equal(starts, 2);
+    assert.equal(stops, 0);
+    response = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${created.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    assert.equal(starts, 3);
+    assert.equal(stops, 1);
+    response = await fetch(`${base}/api/enterprise/bootstrap`, {
+      headers: { cookie: browser.cookie },
+    });
+    assert.equal(response.status, 200);
+    const bootstrap = (await response.json()) as {
+      activeCustomer: { id: string; workspacePath: string } | null;
+    };
+    assert.equal(bootstrap.activeCustomer?.id, created.id);
+    assert.equal(
+      bootstrap.activeCustomer?.workspacePath,
+      join(dir, "workspaces", "customers", created.id),
+    );
+  } finally {
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -326,9 +535,9 @@ test("native proxy injects only its runtime credential and hides runtime cookies
   const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "cases"));
   const hash = await EnterpriseAuth.hashPassword(password);
   const { tenant, user } = store.bootstrapAdmin("Tenant", "admin@example.test", hash);
-  const space = store.createServiceSpace(user.id, tenant.id, { name: "Support" });
-  const object = store.createServiceObject(user.id, space.id, { name: "Widget", type: "product" });
-  const value = store.createCase(user.id, object.id, { title: "Inspect widget" });
+  const value = await store.createCustomer(user.id, tenant.id, { name: "Widget works" });
+  const markerPath = join(value.workspacePath, "marker.txt");
+  await writeFile(markerPath, "stable workspace file");
   let runtimeToken = "";
   const gateway = createEnterpriseGateway({
     store,
@@ -347,13 +556,12 @@ test("native proxy injects only its runtime credential and hides runtime cookies
     let response = await api(
       base,
       browser,
-      `/api/enterprise/cases/${value.id}/activate`,
+      `/api/enterprise/customers/${value.id}/activate`,
       "POST",
       {},
     );
     assert.equal(response.status, 200);
-    const caseContextPath = join(value.workspacePath, "CASE_CONTEXT.md");
-    const before = await stat(caseContextPath, { bigint: true });
+    const before = await stat(markerPath, { bigint: true });
     const proxied = await rawGet(`${base}/api/test`, {
       cookie: `${browser.cookie}; zcode_lite_token=attacker`,
       authorization: "Bearer attacker",
@@ -361,7 +569,7 @@ test("native proxy injects only its runtime credential and hides runtime cookies
       "x-private": "must-not-reach-runtime",
       "x-forwarded-host": "attacker.example.test",
     });
-    const after = await stat(caseContextPath, { bigint: true });
+    const after = await stat(markerPath, { bigint: true });
     assert.equal(proxied.status, 302);
     assert.equal(proxied.body, "redirect");
     assert.equal(proxied.headers["set-cookie"], undefined);
@@ -408,9 +616,7 @@ test("membership revocation immediately closes an active user's WebSocket", asyn
     passwordHash: hash,
     role: "member",
   });
-  const space = store.createServiceSpace(admin.id, tenant.id, { name: "Support" });
-  const object = store.createServiceObject(admin.id, space.id, { name: "Widget", type: "product" });
-  const value = store.createCase(admin.id, object.id, { title: "Inspect widget" });
+  const value = await store.createCustomer(admin.id, tenant.id, { name: "Widget works" });
   const auth = new EnterpriseAuth(store);
   const gateway = createEnterpriseGateway({
     store,
@@ -424,7 +630,7 @@ test("membership revocation immediately closes an active user's WebSocket", asyn
   const base = `http://127.0.0.1:${address.port}`;
   const memberAuth = await auth.login("member@example.test", password);
   const adminSession = await login(base, "admin@example.test");
-  store.activateCase(memberAuth.session.id, value.id);
+  store.activateCustomer(memberAuth.session.id, value.id);
   const client = createConnection({ host: "127.0.0.1", port: address.port });
   try {
     await new Promise<void>((resolve, reject) => {
@@ -446,7 +652,7 @@ test("membership revocation immediately closes an active user's WebSocket", asyn
     );
     assert.equal(response.status, 200);
     await clientClosed;
-    assert.equal(store.getActiveCase(memberAuth.session.id), null);
+    assert.equal(store.getActiveCustomer(memberAuth.session.id), null);
   } finally {
     client.destroy();
     await gateway.close();
@@ -456,68 +662,7 @@ test("membership revocation immediately closes an active user's WebSocket", asyn
   }
 });
 
-test("session binding accepts only task IDs owned by the active Case runtime", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-session-"));
-  await writeFile(join(dir, "index.html"), "ready");
-  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "cases"));
-  const hash = await EnterpriseAuth.hashPassword(password);
-  const { tenant, user } = store.bootstrapAdmin("Tenant", "admin@example.test", hash);
-  const space = store.createServiceSpace(user.id, tenant.id, { name: "Support" });
-  const object = store.createServiceObject(user.id, space.id, { name: "Widget", type: "product" });
-  const value = store.createCase(user.id, object.id, { title: "Inspect widget" });
-  const runtimes = new RuntimeManager({
-    async start(input) {
-      return {
-        id: `fake-${input.id}`,
-        url: "http://127.0.0.1:9",
-        workspacePath: input.workspacePath,
-        stop: async () => undefined,
-      };
-    },
-    async healthy() {
-      return true;
-    },
-    async ownsSession(caseInfo, nativeSessionId) {
-      return caseInfo.id === value.id && nativeSessionId === "case-owned-session";
-    },
-  });
-  const gateway = createEnterpriseGateway({
-    store,
-    auth: new EnterpriseAuth(store),
-    runtimes,
-    staticRoot: dir,
-    port: 0,
-  });
-  await gateway.listen();
-  const address = gateway.server.address() as AddressInfo;
-  const base = `http://127.0.0.1:${address.port}`;
-  try {
-    const browser = await login(base, "admin@example.test");
-    const activated = await api(
-      base,
-      browser,
-      `/api/enterprise/cases/${value.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(activated.status, 200);
-    let response = await api(base, browser, `/api/enterprise/cases/${value.id}/session`, "POST", {
-      sessionId: "foreign-session-id",
-    });
-    assert.equal(response.status, 404);
-    assert.equal(store.getCase(user.id, value.id).nativeSessionId, null);
-    response = await api(base, browser, `/api/enterprise/cases/${value.id}/session`, "POST", {
-      sessionId: "case-owned-session",
-    });
-    assert.equal(response.status, 200);
-    assert.equal(store.getCase(user.id, value.id).nativeSessionId, "case-owned-session");
-  } finally {
-    await gateway.close();
-    store.close();
-  }
-});
-
-test("MCP relay streams through one Case binding without writing the upstream secret into the workspace", async () => {
+test("MCP relay streams through one Customer binding without writing the upstream secret into the workspace", async () => {
   const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-mcp-"));
   await writeFile(join(dir, "index.html"), "ready");
   const secret = "never-write-this-real-secret";
@@ -562,20 +707,16 @@ test("MCP relay streams through one Case binding without writing the upstream se
   process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
     [tenant.id]: ["https://mcp.example.test", "https://optional.example.test"],
   });
-  const space = store.createServiceSpace(user.id, tenant.id, { name: "Support" });
-  const object = store.createServiceObject(user.id, space.id, { name: "Widget", type: "product" });
-  const value = store.createCase(user.id, object.id, { title: "Inspect widget" });
-  const binding = store.createMcpBinding(user.id, tenant.id, {
+  const value = await store.createCustomer(user.id, tenant.id, { name: "Widget works" });
+  const binding = await store.createCustomerMcpBinding(user.id, value.id, {
     name: "support-mcp",
     endpoint: "https://mcp.example.test/stream",
     secretRef,
-    serviceSpaceId: space.id,
   });
-  const missingBinding = store.createMcpBinding(user.id, tenant.id, {
+  const missingBinding = await store.createCustomerMcpBinding(user.id, value.id, {
     name: "optional-mcp",
     endpoint: "https://optional.example.test/stream",
     secretRef: missingSecretRef,
-    serviceSpaceId: space.id,
   });
   missingBindingId = missingBinding.id;
   const gateway = createEnterpriseGateway({
@@ -597,7 +738,7 @@ test("MCP relay streams through one Case binding without writing the upstream se
     const activated = await api(
       base,
       browser,
-      `/api/enterprise/cases/${value.id}/activate`,
+      `/api/enterprise/customers/${value.id}/activate`,
       "POST",
       {},
     );
@@ -623,8 +764,6 @@ test("MCP relay streams through one Case binding without writing the upstream se
     );
     const files = await Promise.all([
       readFile(configPath, "utf8"),
-      readFile(join(value.workspacePath, "CASE_CONTEXT.md"), "utf8"),
-      readFile(join(value.workspacePath, "AGENTS.md"), "utf8"),
       readFile(
         join(
           dirname(value.workspacePath),

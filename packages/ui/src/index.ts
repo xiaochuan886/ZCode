@@ -8,6 +8,12 @@ export {
   useAssistantCodeCommentFeatureEnabled,
 } from "./AssistantCodeCommentFeatureProvider.js";
 export { Root } from "./Root.js";
+export type {
+  EnterpriseCustomerSummary,
+  EnterpriseRootContext,
+  EnterpriseTenantSummary,
+  EnterpriseUserSummary,
+} from "./root/types.js";
 export { UpdateStatusWindowRoot } from "./UpdateStatusWindowRoot.js";
 export { ConfirmDialogHost } from "./ConfirmDialog.js";
 export { Terminal } from "./Terminal.js";

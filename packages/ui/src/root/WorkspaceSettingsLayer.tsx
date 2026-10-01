@@ -18,6 +18,8 @@ export function WorkspaceSettingsLayer({
   onLogin,
   onLogout,
   user,
+  enterpriseContext,
+  enterpriseManagedModel,
 }: WorkspaceSettingsLayerProps) {
   useEffect(() => {
     logger.info("[Root] settings layer mounted");
@@ -43,6 +45,8 @@ export function WorkspaceSettingsLayer({
             onLogin={onLogin}
             onLogout={onLogout}
             user={user}
+            enterpriseContext={enterpriseContext}
+            enterpriseManagedModel={enterpriseManagedModel}
           />
         </ServiceProvider>
       ) : (
@@ -59,6 +63,8 @@ export function WorkspaceSettingsLayer({
           onLogin={onLogin}
           onLogout={onLogout}
           user={user}
+          enterpriseContext={enterpriseContext}
+          enterpriseManagedModel={enterpriseManagedModel}
         />
       )}
     </div>

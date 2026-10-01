@@ -168,16 +168,21 @@ interface SettingsPageConfigOptions {
   isDesktop?: boolean;
   isMacDesktop?: boolean;
   isWindowsDesktop?: boolean;
+  enterpriseManagedModel?: boolean;
 }
 
 export function createSettingsPageConfig({
   isDesktop = false,
   isMacDesktop = false,
   isWindowsDesktop = false,
+  enterpriseManagedModel = false,
 }: SettingsPageConfigOptions = {}) {
   const showComputerUse = isDesktop || isMacDesktop || isWindowsDesktop;
   const settingsSections = BASE_SETTINGS_SECTIONS.filter((section) => {
     if (section.id === "computerUse" && !showComputerUse) return false;
+    // 企业模型连接由租户控制面统一管理；隐藏原生编辑器，避免成员从设置页写入本地 provider。
+    if (section.id === "modelProvider" && enterpriseManagedModel) return false;
+    if (section.id === "usage" && enterpriseManagedModel) return false;
     return isSettingsSectionEnabled(section.id);
   });
   const settingsSectionGroups = BASE_SETTINGS_SECTION_GROUPS.map((group) => ({

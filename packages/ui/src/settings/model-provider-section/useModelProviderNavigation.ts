@@ -58,6 +58,7 @@ interface UseModelProviderNavigationOptions {
   familyConnectionSettingsFailed?: boolean;
   subscribedTeamProducts?: EnterpriseCodingPlanProductDisplay[];
   showPurchasedTeamPlanFallback?: boolean;
+  enterpriseOnlyCustomProviders?: boolean;
   selectedNodeKey: string | null;
   setSelectedNodeKey: (key: string | null) => void;
   intl: ReturnType<typeof useZCodeIntl>["intl"];
@@ -77,6 +78,7 @@ export function useModelProviderNavigation({
   familyConnectionSettingsFailed = false,
   subscribedTeamProducts = [],
   showPurchasedTeamPlanFallback = false,
+  enterpriseOnlyCustomProviders = false,
   selectedNodeKey,
   setSelectedNodeKey,
   intl,
@@ -91,8 +93,10 @@ export function useModelProviderNavigation({
 
   const codingPlanItems = useMemo(
     () =>
-      CODING_PLAN_PROVIDER_SPECS.filter((spec) =>
-        shouldShowCodingPlanForProviderFamilyDomain(spec.oauthProviderId, providerFamilyDomain),
+      CODING_PLAN_PROVIDER_SPECS.filter(
+        (spec) =>
+          !enterpriseOnlyCustomProviders &&
+          shouldShowCodingPlanForProviderFamilyDomain(spec.oauthProviderId, providerFamilyDomain),
       ).map((spec) => {
         const provider = modelProviders.find((item) => item.providerId === spec.id) ?? null;
         const accountEntitled = entitledAccountProviderIds.has(spec.id);
@@ -144,6 +148,7 @@ export function useModelProviderNavigation({
     [
       entitledAccountProviderIds,
       codingPlanEntitlements,
+      enterpriseOnlyCustomProviders,
       intl,
       modelProviders,
       modelProvidersLoading,
@@ -223,7 +228,7 @@ export function useModelProviderNavigation({
       },
     ];
 
-    return groups;
+    return enterpriseOnlyCustomProviders ? groups.filter((group) => group.id === "custom") : groups;
   }, [
     customProviders,
     codingPlanItems,
@@ -232,6 +237,7 @@ export function useModelProviderNavigation({
     // 语言切换时 provider/权益引用可能不变，必须依赖 intl 才能刷新旧 locale 的文案。
     intl,
     connectionSelections,
+    enterpriseOnlyCustomProviders,
     pendingConnectionSelections,
     presetProviders,
     modelProviders,

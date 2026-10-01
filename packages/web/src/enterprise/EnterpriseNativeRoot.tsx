@@ -1,47 +1,53 @@
 import { AppErrorBoundary, Root, ZCodeIntlProvider } from "@zcode/ui";
 import type { IPlatformService } from "@zcode/shared";
 import { connectViaWebSocket } from "@zcode/client";
-import type { EnterpriseCase } from "./api.js";
-import { EnterpriseSessionBinding } from "./EnterpriseSessionBinding.js";
+import type { ActiveCustomer } from "./api.js";
 
 export type NativeServices = Awaited<ReturnType<typeof connectViaWebSocket>>;
+export interface EnterpriseRootContext {
+  user: { id: string; email: string; displayName: string } | null;
+  tenants: readonly { id: string; name: string; role?: "admin" | "member" }[];
+  activeTenantId: string | null;
+  customers: readonly { id: string; name: string }[];
+  activeCustomerId: string | null;
+  onSelectCustomer: (customerId: string) => void | Promise<void>;
+  onSelectTenant?: (tenantId: string) => void | Promise<void>;
+  onOpenModelSettings?: () => void | Promise<void>;
+  onOpenCustomerHome?: () => void | Promise<void>;
+  onLogout?: () => void | Promise<void>;
+}
 export function EnterpriseNativeRoot({
-  activeCase,
+  activeCustomer,
   services,
   platform,
-  csrfToken,
   onError,
+  enterpriseContext,
 }: {
-  activeCase: EnterpriseCase;
+  activeCustomer: ActiveCustomer;
   services: NativeServices;
   platform: IPlatformService;
-  csrfToken: string | null;
   onError: (message: string) => void;
+  enterpriseContext?: EnterpriseRootContext;
 }) {
   return (
-    <AppErrorBoundary>
+    <AppErrorBoundary onCaughtReactError={(error) => onError(error.message)}>
       <ZCodeIntlProvider
         settingService={services.settingService}
         broadcastService={services.broadcastService}
       >
         <Root
-          key={activeCase.id}
+          key={activeCustomer.id}
           services={services}
           platform={platform}
-          initialWorkspaceAbsPath={activeCase.workspacePath}
-          initialTaskId={activeCase.sessionId}
+          initialWorkspaceAbsPath={activeCustomer.workspacePath}
+          initialWorkspaceIdentity={activeCustomer.workspaceIdentity}
           enterpriseManagedModel
           restoreSession={false}
           allowOpenWorkspace={false}
+          enterpriseContext={enterpriseContext}
           preferDirectoryBrowser
           supportsEmbeddedBrowser={false}
           allowRemoteWorkspace={false}
-        />
-        <EnterpriseSessionBinding
-          caseId={activeCase.id}
-          workspacePath={activeCase.workspacePath}
-          csrfToken={csrfToken}
-          onError={onError}
         />
       </ZCodeIntlProvider>
     </AppErrorBoundary>

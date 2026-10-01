@@ -223,19 +223,21 @@ export async function handleMcpRelayRequest(
     send(response, 401, { error: "Unauthorized" });
     return true;
   }
-  const caseValue = store.getCase(credential.actorId, caseId);
-  if (caseValue.status === "closed") {
+  let target: ReturnType<EnterpriseStore["getCustomerRuntimeTarget"]>;
+  try {
+    target = store.getCustomerRuntimeTarget(credential.actorId, caseId);
+  } catch {
     send(response, 404, { error: "Not found" });
     return true;
   }
   const binding = store
-    .listMcpBindingsForCase(credential.actorId, caseId)
+    .listMcpBindingsForCustomer(credential.actorId, target.id)
     .find((candidate) => candidate.id === bindingId);
   if (!binding) {
     send(response, 404, { error: "Not found" });
     return true;
   }
-  if (binding.tenantId !== caseValue.tenantId) {
+  if (binding.tenantId !== target.tenantId) {
     send(response, 404, { error: "Not found" });
     return true;
   }
@@ -247,7 +249,7 @@ export async function handleMcpRelayRequest(
     return true;
   }
   if (
-    !isTenantMcpEndpointAllowed(caseValue.tenantId, endpoint.toString()) ||
+    !isTenantMcpEndpointAllowed(target.tenantId, endpoint.toString()) ||
     endpoint.username ||
     endpoint.password
   ) {
@@ -256,7 +258,7 @@ export async function handleMcpRelayRequest(
   }
   let secret: string | undefined;
   if (binding.secretRef) {
-    if (!isTenantMcpSecretRef(binding.secretRef, caseValue.tenantId)) {
+    if (!isTenantMcpSecretRef(binding.secretRef, target.tenantId)) {
       process.emitWarning(`MCP binding ${binding.id} unavailable: secret reference is invalid.`, {
         code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",
       });

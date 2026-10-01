@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EnterpriseAuth } from "./auth.js";
-import type { EnterpriseCase } from "./types.js";
+import type { EnterpriseRuntimeTarget } from "./types.js";
 import type { RuntimeBinding, RuntimeManager } from "./runtime.js";
 import type { EnterpriseStore } from "./store.js";
 import type { McpDnsLookup } from "./mcp-policy.js";
@@ -26,12 +26,12 @@ export type EnterpriseApiHelpers = {
   str(value: unknown): string;
   origin(request: IncomingMessage, configured?: string): string;
   relayOrigin(request: IncomingMessage, options: GatewayOptions): string;
-  publicCase(value: EnterpriseCase): unknown;
-  runtimeCasesInSpaces(
+  publicCustomer(value: import("./types.js").Customer): unknown;
+  runtimeTargetsForTenant(
     store: EnterpriseStore,
     actorId: string,
-    serviceSpaceIds: string[],
-  ): EnterpriseCase[];
+    tenantId: string,
+  ): EnterpriseRuntimeTarget[];
 };
 
 export type EnterpriseApiRequest = {
@@ -43,9 +43,9 @@ export type EnterpriseApiRequest = {
   method: string;
   closeSockets(sessionId: string): void;
   closeUserSockets(userId: string): void;
-  stopRuntime(value: EnterpriseCase): Promise<void>;
+  stopRuntime(value: EnterpriseRuntimeTarget): Promise<void>;
   ensureRuntime(
-    value: EnterpriseCase,
+    value: EnterpriseRuntimeTarget,
     userId: string,
     requestOrigin: string,
   ): Promise<RuntimeBinding>;

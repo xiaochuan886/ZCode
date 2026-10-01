@@ -169,6 +169,7 @@ function filterVisibleWorkspaceMenuTabs({
 export function ChatEmptyWorkspacePreviewMenu({
   workspacePath,
   workspaceIdentity,
+  workspaceDisplayLabel,
   isWindowsDesktop = false,
   workspaceTabs,
   allowConversationWorkspaceSelection = true,
@@ -188,6 +189,8 @@ export function ChatEmptyWorkspacePreviewMenu({
 }: {
   workspacePath: string;
   workspaceIdentity?: string;
+  /** 企业客户 workspace 的展示名；仅覆盖 pill 文案，不参与 workspace identity/path 匹配。 */
+  workspaceDisplayLabel?: string;
   isWindowsDesktop?: boolean;
   workspaceTabs: ReadonlyArray<ChatEmptyWorkspaceMenuTab>;
   allowConversationWorkspaceSelection?: boolean;
@@ -255,7 +258,7 @@ export function ChatEmptyWorkspacePreviewMenu({
   );
   const currentWorkspaceTitle = isConversationWorkspace
     ? intl.formatMessage({ id: "chat.empty.selectProject" })
-    : getWorkspaceTriggerTitle(workspacePath, homeWorkspaceLabel);
+    : workspaceDisplayLabel?.trim() || getWorkspaceTriggerTitle(workspacePath, homeWorkspaceLabel);
   const CurrentWorkspaceIcon = isCurrentRemoteWorkspace
     ? Cloud
     : homeWorkspacePath === workspacePath
@@ -345,10 +348,14 @@ export function ChatEmptyWorkspacePreviewMenu({
         </div>
         <div className="p-1">
           {visibleWorkspaceTabs.map((workspaceTab, index) => {
-            const workspaceTitle = getWorkspaceListTitle(
-              workspaceTab.workspacePath,
-              homeWorkspaceLabel,
-            );
+            const isCurrentWorkspace = isWorkspaceMenuTabSelected(workspaceTab, {
+              workspacePath,
+              workspaceIdentity,
+            });
+            const workspaceTitle =
+              isCurrentWorkspace && workspaceDisplayLabel?.trim()
+                ? workspaceDisplayLabel.trim()
+                : getWorkspaceListTitle(workspaceTab.workspacePath, homeWorkspaceLabel);
             const isRemoteWorkspace = hasRemoteWorkspaceIdentity(workspaceTab);
             const WorkspaceIcon = isRemoteWorkspace
               ? Cloud

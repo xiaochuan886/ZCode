@@ -40,6 +40,7 @@ import {
 } from "@zcode/shared";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
 import { createHostCapabilityStore } from "./hostCapability.js";
+import { createEnterpriseManagedModelOverrides } from "./enterprise-managed-model-policy.js";
 
 function wrapWebSocket(ws: WebSocket): ISocket {
   const onData = new Emitter<VSBuffer>();
@@ -87,6 +88,7 @@ function setupChannelServer(
   ws: WebSocket,
   services: ServiceCollection,
   clientMode: "desktop-continuous" | "web-remote-replayable",
+  enterpriseManagedModel: boolean,
 ) {
   const socket = wrapWebSocket(ws);
   const protocol = new SocketProtocol(socket);
@@ -102,6 +104,12 @@ function setupChannelServer(
       })
     : undefined;
   const overrides = new Map<string, unknown>();
+  for (const [channelName, service] of createEnterpriseManagedModelOverrides(
+    services,
+    enterpriseManagedModel,
+  )) {
+    overrides.set(channelName, service);
+  }
   if (connectionScope) {
     overrides.set(IZCodeAgentService.channelName, connectionScope.service);
   }
@@ -131,7 +139,7 @@ function generateId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-interface HttpServerOptions {
+export interface HttpServerOptions {
   serverId?: string;
   name?: string;
   host?: string;
@@ -140,6 +148,8 @@ interface HttpServerOptions {
   spaFallback?: boolean;
   staticRoot?: string;
   workspaces?: ServerRemoteWorkspaceInfo[];
+  /** 仅企业 Customer runtime 传入；普通 Web/远控不得默认开启。 */
+  enterpriseManagedModel?: boolean;
 }
 
 function readTrimmedEnv(name: string): string | undefined {
@@ -326,14 +336,24 @@ export function createHttpServer(
     "/ws",
     upgradeWebSocket(() => ({
       onOpen(_event, ws) {
-        setupChannelServer(ws.raw as WebSocket, services, "web-remote-replayable");
+        setupChannelServer(
+          ws.raw as WebSocket,
+          services,
+          "web-remote-replayable",
+          options.enterpriseManagedModel ?? false,
+        );
       },
     })),
   );
 
   const upgradeTrustedHostWebSocket = upgradeWebSocket(() => ({
     onOpen(_event, ws) {
-      setupChannelServer(ws.raw as WebSocket, services, "desktop-continuous");
+      setupChannelServer(
+        ws.raw as WebSocket,
+        services,
+        "desktop-continuous",
+        options.enterpriseManagedModel ?? false,
+      );
     },
   }));
   app.use("/ws/host", async (c, next) => {
@@ -440,7 +460,12 @@ export function createHttpServer(
             .register(ISystemService, connection.services.systemService)
             .register(ITerminalService, connection.services.terminalService);
 
-          setupChannelServer(ws.raw as WebSocket, remoteServices, "web-remote-replayable");
+          setupChannelServer(
+            ws.raw as WebSocket,
+            remoteServices,
+            "web-remote-replayable",
+            options.enterpriseManagedModel ?? false,
+          );
         },
       };
     }),

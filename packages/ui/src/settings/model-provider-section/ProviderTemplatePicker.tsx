@@ -24,29 +24,33 @@ export function ProviderTemplatePicker({
   onCreateFromTemplate,
   onCreateCustom,
   creating,
+  customOnly = false,
 }: {
   templates: ProviderSettingsView["providerTemplates"];
   onBack: () => void;
   onCreateFromTemplate: ProviderTemplateCreate;
   onCreateCustom: CustomProviderCreate;
   creating: boolean;
+  customOnly?: boolean;
 }) {
   const { intl, locale } = useZCodeIntl();
   const { dismissFeedback, showFeedback } = useProviderDetailFeedback();
   const customLabel = intl.formatMessage({ id: "settings.modelProvider.newProviderName" });
   const zhipuIds = ["bigmodel-api", "zai-api", "bigmodel-standard-api", "zai-standard-api"];
-  const groups = [
-    {
-      id: "zhipu",
-      templates: zhipuIds.flatMap((id) =>
-        templates.filter((template) => template.templateId === id),
-      ),
-    },
-    {
-      id: "other",
-      templates: templates.filter((template) => !zhipuIds.includes(template.templateId)),
-    },
-  ] as const;
+  const groups = customOnly
+    ? [{ id: "other" as const, templates: [] as ProviderSettingsView["providerTemplates"] }]
+    : [
+        {
+          id: "zhipu" as const,
+          templates: zhipuIds.flatMap((id) =>
+            templates.filter((template) => template.templateId === id),
+          ),
+        },
+        {
+          id: "other" as const,
+          templates: templates.filter((template) => !zhipuIds.includes(template.templateId)),
+        },
+      ];
   const createWithFeedback = async (create: () => Promise<void>) => {
     const feedbackKey = "provider-template-create";
     dismissFeedback(feedbackKey);

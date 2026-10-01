@@ -69,3 +69,7 @@ packages/desktop/.e2e-artifacts/
 packages/desktop/.e2e-cache/
 packages/desktop/.e2e-network-capture/
 .zcode-runtime/
+# 企业网关运行数据（SQLite 租户库含加密模型凭据、客户工作区），与 .dockerignore 同步排除。
+.enterprise-data/
+**/.enterprise-data/
+**/enterprise.sqlite*

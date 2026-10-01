@@ -1,89 +1,144 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
+import {
+  normalizeModelCredentialInput,
+  type GatewayModelCredential,
+} from "./model-credentials.js";
+import { EnterpriseError } from "./types.js";
 
-export const enterpriseModelProviders = ["zai-api", "bigmodel-api"] as const;
+/** Enterprise mode has one generic provider slot; fixed Z.ai/BigModel slots are not provisioned. */
+export const enterpriseModelProviders = ["custom"] as const;
 export type EnterpriseModelProvider = (typeof enterpriseModelProviders)[number];
+export const ENTERPRISE_MODEL_PROVIDER_ID = "enterprise-custom";
 
-export interface ModelRelayCapability {
-  token: string;
-  actorId: string;
-  providerFamily: EnterpriseModelProvider;
-}
-
-function managedRule(
-  providerFamily: EnterpriseModelProvider,
-  caseId: string,
-  relayOrigin: string,
-  token: string,
-) {
+function managedProviderRule(credential: ReturnType<typeof normalizeModelCredentialInput>) {
   return {
-    providerId: `enterprise-${providerFamily}`,
-    templateId: providerFamily,
-    providerName: providerFamily === "zai-api" ? "企业 Z.ai Coding Plan" : "企业智谱 Coding Plan",
+    providerId: ENTERPRISE_MODEL_PROVIDER_ID,
+    providerName: credential.providerName,
     config: {
-      group: "standard-personal",
-      access: { type: "zhipu-coding-plan-api-key", apiKey: token },
+      group: "standard-personal" as const,
+      // 服务端分发：写入真实上游地址与真实 API key，原生 runtime 直连供应商。
+      // 不再经过网关中继，避免中继的公网 DNS 校验在 fake-IP 代理环境下拒绝请求。
+      access: { type: "api-key" as const, apiKey: credential.apiKey },
       api: {
-        type: "anthropic-messages",
-        baseUrl: `${relayOrigin}/api/enterprise/model-relay/${encodeURIComponent(caseId)}/${providerFamily}`,
+        type: credential.apiType,
+        baseUrl: credential.baseUrl,
       },
+      personalModelIds: [credential.modelId],
+      modelOrder: [credential.modelId],
     },
   };
 }
 
-/** Materialize only scoped relay capabilities in Case HOME; tenant API keys stay in the gateway. */
-export async function provisionCaseModelProviders(input: {
-  caseId: string;
-  actorId: string;
-  relayOrigin: string;
-  runtimeDataRoot: string;
-  configuredProviders: readonly EnterpriseModelProvider[];
-}): Promise<Map<EnterpriseModelProvider, ModelRelayCapability>> {
-  const capabilities = new Map<EnterpriseModelProvider, ModelRelayCapability>();
-  const rules = input.configuredProviders.map((providerFamily) => {
-    const token = randomBytes(32).toString("base64url");
-    capabilities.set(providerFamily, { token, actorId: input.actorId, providerFamily });
-    return managedRule(providerFamily, input.caseId, input.relayOrigin, token);
+function isManagedProviderId(value: unknown): boolean {
+  return (
+    value === ENTERPRISE_MODEL_PROVIDER_ID ||
+    value === "enterprise-zai-api" ||
+    value === "enterprise-bigmodel-api"
+  );
+}
+
+function unmanagedProviderRules(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((rule) => {
+    if (!rule || typeof rule !== "object") return false;
+    return !isManagedProviderId((rule as { providerId?: unknown }).providerId);
   });
-  const configDir = join(input.runtimeDataRoot, input.caseId, ".zcode", "v2");
-  const target = join(configDir, "provider_config.json");
-  let previous: Record<string, unknown> | null = null;
+}
+
+function unmanagedProviderOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (providerId): providerId is string =>
+      typeof providerId === "string" && !isManagedProviderId(providerId),
+  );
+}
+
+function unmanagedModelRules(value: unknown): Record<string, unknown[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { providerModelRules: [], manualProviderModelRules: [] };
+  }
+  const source = value as Record<string, unknown>;
+  const filter = (rules: unknown): unknown[] =>
+    Array.isArray(rules)
+      ? rules.filter((rule) => {
+          if (!rule || typeof rule !== "object") return false;
+          return !isManagedProviderId((rule as { providerId?: unknown }).providerId);
+        })
+      : [];
+  return {
+    providerModelRules: filter(source.providerModelRules),
+    manualProviderModelRules: filter(source.manualProviderModelRules),
+  };
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+async function readPreviousConfig(target: string): Promise<Record<string, unknown> | null> {
   try {
     const parsed: unknown = JSON.parse(await readFile(target, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-      previous = parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>;
+    throw new Error("invalid provider configuration");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
+}
+
+/**
+ * Distribute the tenant credential into a Customer runtime. The runtime receives the real
+ * upstream base URL and API key in the managed `enterprise-custom` slot and connects to the
+ * provider directly with the native provider stack.
+ */
+export async function provisionCustomerModelProvider(input: {
+  customerId: string;
+  tenantId: string;
+  runtimeDataRoot: string;
+  credential: GatewayModelCredential | null;
+}): Promise<void> {
+  if (!input.customerId.trim() || !input.tenantId.trim())
+    throw new Error("invalid Customer model scope");
+  const suppliedCredential = input.credential;
+  const credential = suppliedCredential ? normalizeModelCredentialInput(suppliedCredential) : null;
+  if (credential && suppliedCredential && suppliedCredential.tenantId !== input.tenantId)
+    throw new EnterpriseError("validation");
+
+  const managedRule = credential ? managedProviderRule(credential) : null;
+
+  const configDir = join(input.runtimeDataRoot, input.customerId, ".zcode", "v2");
+  const target = join(configDir, "provider_config.json");
+  const previous = await readPreviousConfig(target);
   const oldConfig = previous?.config as Record<string, unknown> | undefined;
-  const oldRules = (oldConfig?.providerConfigRules as { providerRules?: unknown[] } | undefined)
-    ?.providerRules;
-  const unmanagedRules = Array.isArray(oldRules)
-    ? oldRules.filter((rule) => {
-        if (!rule || typeof rule !== "object") return false;
-        const providerId = (rule as { providerId?: unknown }).providerId;
-        return providerId !== "enterprise-zai-api" && providerId !== "enterprise-bigmodel-api";
-      })
-    : [];
-  const providerOrder = [
-    ...rules.map((rule) => rule.providerId),
-    ...(
-      (Array.isArray(oldConfig?.providerOrder) ? oldConfig.providerOrder : []) as string[]
-    ).filter((id) => id !== "enterprise-zai-api" && id !== "enterprise-bigmodel-api"),
-  ];
-  const defaultModelSelection = rules.length
-    ? { providerId: rules[0]!.providerId, modelId: "GLM-5.3" }
-    : undefined;
+  const oldProviderRules = (
+    oldConfig?.providerConfigRules as { providerRules?: unknown[] } | undefined
+  )?.providerRules;
+  const providerRules = managedRule
+    ? [managedRule, ...unmanagedProviderRules(oldProviderRules)]
+    : unmanagedProviderRules(oldProviderRules);
+  const providerOrder = unique([
+    ...(managedRule ? [ENTERPRISE_MODEL_PROVIDER_ID] : []),
+    ...unmanagedProviderOrder(oldConfig?.providerOrder),
+  ]);
+  const oldDefault = oldConfig?.defaultModelSelection;
+  const defaultModelSelection = managedRule
+    ? { providerId: ENTERPRISE_MODEL_PROVIDER_ID, modelId: credential!.modelId }
+    : oldDefault &&
+        typeof oldDefault === "object" &&
+        !Array.isArray(oldDefault) &&
+        !isManagedProviderId((oldDefault as { providerId?: unknown }).providerId)
+      ? oldDefault
+      : undefined;
+  const modelConfigRules = unmanagedModelRules(oldConfig?.modelConfigRules);
   const contents = {
     schemaVersion: 1,
     config: {
       providerOrder,
-      providerConfigRules: { providerRules: [...rules, ...unmanagedRules] },
-      modelConfigRules: oldConfig?.modelConfigRules ?? {
-        providerModelRules: [],
-        manualProviderModelRules: [],
-      },
+      providerConfigRules: { providerRules },
+      modelConfigRules,
       ...(defaultModelSelection ? { defaultModelSelection } : {}),
     },
   };
@@ -96,8 +151,7 @@ export async function provisionCaseModelProviders(input: {
     });
     await rename(temporary, target);
   } catch (error) {
-    await import("node:fs/promises").then(({ rm }) => rm(temporary, { force: true }));
+    await rm(temporary, { force: true });
     throw error;
   }
-  return capabilities;
 }

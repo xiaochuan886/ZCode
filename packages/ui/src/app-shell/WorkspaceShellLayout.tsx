@@ -206,6 +206,8 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   onLogout,
   onLogin,
   user,
+  enterpriseContext,
+  enterpriseManagedModel,
   reconnectingRemoteWorkspaceKeys,
   remoteWorkspaceErrorByWorkspaceKey,
   reconnectingRemoteWorkspaceLogsByWorkspaceKey = EMPTY_RECONNECTING_REMOTE_WORKSPACE_LOGS_BY_WORKSPACE_KEY,
@@ -433,6 +435,10 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   const workspaceSidebarResizeLabel = intl.formatMessage({
     id: "workspaceSidebar.resizeSidebar",
   });
+  const enterpriseWorkspaceDisplayLabel =
+    enterpriseContext?.customers
+      .find((customer) => customer.id === enterpriseContext.activeCustomerId)
+      ?.name.trim() || undefined;
 
   useEffect(() => {
     conversationAutoCollapseStateRef.current = {
@@ -1171,6 +1177,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
         <ChatEmptyWorkspacePreviewMenu
           workspacePath={workspaceAbsPath}
           workspaceIdentity={workspaceIdentity}
+          workspaceDisplayLabel={enterpriseWorkspaceDisplayLabel}
           isWindowsDesktop={isWindowsDesktop}
           workspaceTabs={workspaceTabs}
           onSelectWorkspace={(workspaceTab) =>
@@ -1583,6 +1590,8 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                     onLogout={onLogout}
                     onLogin={onLogin}
                     user={user}
+                    enterpriseContext={enterpriseContext}
+                    enterpriseManagedModel={enterpriseManagedModel}
                     isDesktop={isDesktop}
                     isMacDesktop={isMacDesktop}
                     isWindowsDesktop={isWindowsDesktop}
@@ -1636,7 +1645,8 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
           data-panel=""
           id="content"
           className={cn(
-            "flex min-w-[320px] flex-1 flex-col",
+            "flex flex-1 flex-col",
+            enterpriseContext ? "min-w-0" : "min-w-[320px]",
             hasDesktopPanelInset ? "p-1 pl-0 pt-0" : "p-0",
           )}
         >
@@ -1704,6 +1714,7 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
                           remoteTarget={workspaceRemoteTarget}
                           localWorkspacePath={workspaceLocalPathForRemoteMcpSync}
                           projectName={projectName}
+                          workspaceDisplayLabel={enterpriseWorkspaceDisplayLabel}
                           activeTaskTitle={activeTaskTitle}
                           activeTaskChangeSummary={activeTaskChangeSummary}
                           hasUpdateReady={hasUpdateStatusButton}

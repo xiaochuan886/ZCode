@@ -404,6 +404,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   activeTaskId,
   activeTaskChangeSummary,
   workspaceTabs,
+  workspaceDisplayLabel,
   onOpenChange,
   onSelectTask,
   onSearchResultHighlightRequest,
@@ -416,6 +417,7 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
   activeTaskId?: string | null;
   activeTaskChangeSummary?: ZCodeTaskChangeSummary | null;
   workspaceTabs: WorkspaceTabState[];
+  workspaceDisplayLabel?: string;
   onOpenChange: (open: boolean) => void;
   onSelectTask: (
     targetWorkspacePath: string,
@@ -492,10 +494,12 @@ export const CommandCenterDialog = memo(function CommandCenterDialogComponent({
       new Map(
         effectiveWorkspaceTabs.map((tab) => [
           tab.workspaceIdentity?.trim() || tab.workspacePath,
-          tab.label,
+          (tab.workspaceIdentity?.trim() || tab.workspacePath) === workspaceKey
+            ? workspaceDisplayLabel?.trim() || tab.label
+            : tab.label,
         ]),
       ),
-    [effectiveWorkspaceTabs],
+    [effectiveWorkspaceTabs, workspaceDisplayLabel, workspaceKey],
   );
   const commandOptions = useMemo(
     () =>

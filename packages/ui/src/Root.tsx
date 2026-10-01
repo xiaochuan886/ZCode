@@ -160,6 +160,7 @@ function RootInner({
   supportsEmbeddedBrowser: explicitSupportsEmbeddedBrowser,
   allowRemoteWorkspace = true,
   initialWorkspaceLoadingFallback,
+  enterpriseContext,
 }: RootProps) {
   useEffect(() => {
     setMcpStorePlatform(platform);
@@ -430,7 +431,9 @@ function RootInner({
       rootProviderAvailability.hydrated || rootModelSelectionRead.state.status === "error",
   });
   const providerAvailabilityLoginEntryGuardEnabled =
-    shouldEnableProviderAvailabilityLoginEntryGuard();
+    shouldEnableProviderAvailabilityLoginEntryGuard() &&
+    enterpriseContext === undefined &&
+    !enterpriseManagedModel;
   const { startupCheckCompleted: providerAvailabilityStartupCheckCompleted } =
     useProviderAvailabilityLoginEntryGuard({
       enabled: providerAvailabilityLoginEntryGuardEnabled,
@@ -961,9 +964,11 @@ function RootInner({
     onCreateTask: handleCreateTask,
     onOpenWorkspace: handleOpenWorkspace,
     allowOpenWorkspace,
-    onLogin: !user ? handleOpenLoginEntry : undefined,
+    onLogin: !user && enterpriseContext === undefined ? handleOpenLoginEntry : undefined,
     onLogout: user ? handleLogout : undefined,
     user,
+    enterpriseContext,
+    enterpriseManagedModel,
   };
 
   if (isStartupRenderBlocked) {
@@ -1060,8 +1065,10 @@ function RootInner({
             allowRemoteWorkspace={allowRemoteWorkspace}
             handleBackFromSettings={handleBackFromSettings}
             handleLogout={user ? handleLogout : undefined}
-            onLogin={!user ? handleOpenLoginEntry : undefined}
+            onLogin={!user && enterpriseContext === undefined ? handleOpenLoginEntry : undefined}
             user={user}
+            enterpriseContext={enterpriseContext}
+            enterpriseManagedModel={enterpriseManagedModel}
             reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
             remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
             reconnectingRemoteWorkspaceLogsByWorkspaceKey={

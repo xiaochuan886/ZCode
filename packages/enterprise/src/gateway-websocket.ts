@@ -1,8 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import type { EnterpriseAuth } from "./auth.js";
-import type { EnterpriseCase } from "./types.js";
-import type { EnterpriseSession } from "./types.js";
+import type { EnterpriseRuntimeTarget, EnterpriseSession } from "./types.js";
 import type { RuntimeBinding } from "./runtime.js";
 import type { EnterpriseApiHelpers, GatewayOptions } from "./gateway-types.js";
 import { nativePathAllowed, proxyWebSocket, validWebSocketHandshake } from "./proxy.js";
@@ -17,7 +16,7 @@ export function attachEnterpriseWebSocketHandler(input: {
   sockets: Map<string, Set<Duplex>>;
   socketUsers: Map<string, string>;
   ensureRuntime(
-    value: EnterpriseCase,
+    value: EnterpriseRuntimeTarget,
     userId: string,
     requestOrigin: string,
   ): Promise<RuntimeBinding>;
@@ -48,8 +47,8 @@ export function attachEnterpriseWebSocketHandler(input: {
         fail(401);
         return;
       }
-      const value = options.store.getActiveCase(session.id);
-      if (!value || value.status === "closed") {
+      const value = options.store.getActiveRuntimeTarget(session.id);
+      if (!value) {
         fail(403);
         return;
       }
@@ -60,12 +59,8 @@ export function attachEnterpriseWebSocketHandler(input: {
         fail(401);
         return;
       }
-      const activeCase = options.store.getActiveCase(session.id);
-      if (
-        current.id !== session.id ||
-        activeCase?.id !== value.id ||
-        activeCase.status === "closed"
-      ) {
+      const activeTarget = options.store.getActiveRuntimeTarget(session.id);
+      if (current.id !== session.id || activeTarget?.runtimeId !== value.runtimeId) {
         fail(403);
         return;
       }
@@ -78,7 +73,8 @@ export function attachEnterpriseWebSocketHandler(input: {
       socketUsers.set(session.id, session.userId);
       const authorizationCheck = setInterval(() => {
         const current = options.auth.resolveSession(token);
-        if (!current || options.store.getActiveCase(current.id)?.id !== value.id) socket.destroy();
+        const activeTarget = current ? options.store.getActiveRuntimeTarget(current.id) : null;
+        if (!current || activeTarget?.runtimeId !== value.runtimeId) socket.destroy();
       }, 2000);
       authorizationCheck.unref();
       socket.on("close", () => {

@@ -95,6 +95,7 @@ import { useSelectDirectory } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import {
@@ -280,6 +281,8 @@ export function SettingsPage({
   onLogin,
   onLogout,
   user,
+  enterpriseContext,
+  enterpriseManagedModel = false,
 }: {
   isDesktop?: boolean;
   isWindowsDesktop?: boolean;
@@ -293,6 +296,8 @@ export function SettingsPage({
   onLogin?: () => void;
   onLogout?: () => void;
   user?: UserInfo | null;
+  enterpriseContext?: EnterpriseRootContext;
+  enterpriseManagedModel?: boolean;
 }) {
   const { intl, localePreference, setLocalePreference } = useZCodeIntl();
   const { settingsSectionGroups, settingsSections } = useMemo(
@@ -301,8 +306,9 @@ export function SettingsPage({
         isDesktop: Boolean(isDesktop),
         isMacDesktop: Boolean(isMacDesktop),
         isWindowsDesktop: Boolean(isWindowsDesktop),
+        enterpriseManagedModel: enterpriseManagedModel || enterpriseContext !== undefined,
       }),
-    [isDesktop, isMacDesktop, isWindowsDesktop],
+    [enterpriseContext, enterpriseManagedModel, isDesktop, isMacDesktop, isWindowsDesktop],
   );
   const isLinuxDesktop = Boolean(isDesktop && !isMacDesktop && !isWindowsDesktop);
   const usesInlineWindowControls = Boolean(isWindowsDesktop || isLinuxDesktop);
@@ -593,11 +599,17 @@ export function SettingsPage({
   const requestOnboardingDialog = () => setNewUserOnboardingOpen(true);
   const setActiveSettingsSection = useCallback(
     (section: SettingsSectionId, fallbackSection: SettingsSectionId = activeSection) => {
-      const resolvedSection = resolveSettingsSection(section, fallbackSection);
+      // 企业模式会从动态配置移除原生 modelProvider；所有快捷入口和 deep-link
+      // 都必须复用当前可见列表解析，避免短暂进入空白的隐藏编辑器。
+      const resolvedSection = resolveSettingsSectionForPlatform(
+        section,
+        settingsSections,
+        fallbackSection,
+      );
       setActiveSection(resolvedSection);
       writeLastSettingsSectionPreference(resolvedSection);
     },
-    [activeSection],
+    [activeSection, settingsSections],
   );
   const handleOpenCodingPlanUpgradeSettings = useCallback(
     (
@@ -1542,6 +1554,8 @@ export function SettingsPage({
                   onLogout={onLogout}
                   settingsButtonMode="back"
                   user={user}
+                  enterpriseContext={enterpriseContext}
+                  enterpriseManagedModel={enterpriseManagedModel}
                   // 头像菜单是 WorkspaceSidebarFooter 的共享菜单，Settings 场景不能丢失桌面平台能力。
                   // 之前这里没透传 isDesktop，导致同一个头像菜单在设置页缺少界面缩放入口。
                   isDesktop={isDesktop}
@@ -1818,6 +1832,9 @@ export function SettingsPage({
                               pendingModelProviderTarget={pendingModelProviderTarget}
                               onConsumePendingModelProviderTarget={() =>
                                 setPendingModelProviderTarget(undefined)
+                              }
+                              enterpriseOnlyCustomProviders={
+                                Boolean(enterpriseContext) || enterpriseManagedModel
                               }
                             />
                           </ServiceProvider>

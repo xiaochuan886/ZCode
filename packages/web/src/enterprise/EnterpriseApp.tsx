@@ -2,29 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { connectViaWebSocket } from "@zcode/client";
 import type { IPlatformService } from "@zcode/shared";
-import { button, zh, en } from "./presentation.js";
-import { EnterpriseLogin } from "./EnterpriseLogin.js";
-import { EnterpriseCaseForm } from "./EnterpriseCaseForm.js";
+import { zh, en } from "./presentation.js";
 import { EnterpriseCaseHome } from "./EnterpriseCaseHome.js";
 import { EnterpriseCaseWorkspace } from "./EnterpriseCaseWorkspace.js";
+import { EnterpriseAppLayout } from "./EnterpriseAppLayout.js";
 import { EnterpriseModelSettings } from "./EnterpriseModelSettings.js";
-import { EnterpriseTopBar } from "./EnterpriseTopBar.js";
-import type { NativeServices } from "./EnterpriseNativeRoot.js";
-import { useEnterpriseAction } from "./useEnterpriseAction.js";
-import { useTenantModelStatus } from "./useTenantModelStatus.js";
-import {
-  createEnterpriseClient,
-  type CaseDraft,
-  type EnterpriseBootstrap,
-  type EnterpriseCase,
-  type ServiceObject,
-  type ServiceSpace,
+import type {
+  ActiveCustomer,
+  Customer,
+  CustomerDraft,
+  EnterpriseBootstrap,
 } from "./api.js";
+import type { EnterpriseRootContext, NativeServices } from "./EnterpriseNativeRoot.js";
+import { useEnterpriseAction } from "./useEnterpriseAction.js";
+import { useEnterpriseCustomerCatalog } from "./useEnterpriseCustomerCatalog.js";
+import { useTenantModelStatus } from "./useTenantModelStatus.js";
+import { createEnterpriseClient } from "./api.js";
 
 const api = createEnterpriseClient();
 
 interface NativeBinding {
-  caseId: string;
+  customerId: string;
   services: NativeServices;
 }
 
@@ -38,15 +36,11 @@ export function EnterpriseApp({
   const t = /^zh\b/i.test(navigator.language) ? zh : en;
   const [bootstrap, setBootstrap] = useState(initial);
   const [tenantId, setTenantId] = useState(initial.tenants[0]?.id ?? "");
-  const [spaceId, setSpaceId] = useState(initial.activeCase?.serviceSpaceId ?? "");
-  const [spaces, setSpaces] = useState<ServiceSpace[]>([]);
-  const [objects, setObjects] = useState<ServiceObject[]>([]);
-  const [cases, setCases] = useState<EnterpriseCase[]>([]);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
-  const [caseDialogOpen, setCaseDialogOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initial.activeCustomer));
+  const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const [native, setNative] = useState<NativeBinding | null>(null);
-  const [socket, setSocket] = useState<WebSocket | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
   const connectionGeneration = useRef(0);
   const { error, setError, busy, run } = useEnterpriseAction();
   const {
@@ -54,15 +48,24 @@ export function EnterpriseApp({
     modelStatusLoaded,
     refresh: refreshModelStatus,
   } = useTenantModelStatus(bootstrap.user?.id, tenantId, setError);
-  const [draft, setDraft] = useState<CaseDraft>({
-    serviceSpaceId: spaceId,
-    serviceObjectId: "",
-    title: "",
-    category: "general",
+  const [customerDraft, setCustomerDraft] = useState<CustomerDraft>({
+    tenantId,
+    name: "",
+    type: "",
+  });
+  const [customers, setCustomers] = useEnterpriseCustomerCatalog({
+    user: bootstrap.user,
+    tenantId,
+    tenants: bootstrap.tenants,
+    activeCustomer: bootstrap.activeCustomer,
+    onTenantResolved: setTenantId,
+    setError,
   });
 
-  const activeCase = bootstrap.activeCase;
-  const tenantName = bootstrap.tenants.find((tenant) => tenant.id === tenantId)?.name ?? t.select;
+  const selectedTenant = bootstrap.tenants.find((tenant) => tenant.id === tenantId);
+  const tenantName = selectedTenant?.name ?? t.select;
+  const activeCustomer = bootstrap.activeCustomer;
+  const workspaceTarget = activeCustomer;
 
   async function refresh() {
     const next = await api.bootstrap();
@@ -71,16 +74,23 @@ export function EnterpriseApp({
     return next;
   }
 
+  /**
+   * Invalidate the current generation before changing active customer. The Root
+   * must be removed in the same event before the gateway mutation starts.
+   */
   function disconnect() {
     connectionGeneration.current += 1;
-    flushSync(() => setNative(null));
-    socket?.close();
-    setSocket(null);
+    flushSync(() => {
+      setNative(null);
+      setWorkspaceOpen(false);
+    });
+    socketRef.current?.close();
+    socketRef.current = null;
   }
 
-  async function connect(active: EnterpriseCase) {
+  async function connect(target: ActiveCustomer) {
     const generation = connectionGeneration.current;
-    const wsUrl = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+    const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
     const opened: { current: WebSocket | null } = { current: null };
     const services = await connectViaWebSocket(wsUrl, {
       onOpenSocket: (ws) => {
@@ -91,239 +101,167 @@ export function EnterpriseApp({
       opened.current?.close();
       return;
     }
-    setSocket(opened.current);
-    setNative({ caseId: active.id, services });
+    socketRef.current = opened.current;
+    setNative({ customerId: target.id, services });
   }
 
   useEffect(() => {
-    if (!bootstrap.user || !tenantId) {
-      setSpaces([]);
-      return;
-    }
-    let stale = false;
-    void api
-      .spaces(tenantId)
-      .then((next) => {
-        if (stale) return;
-        setSpaces(next);
-        setSpaceId((current) => {
-          if (current && next.some((space) => space.id === current)) return current;
-          return next[0]?.id ?? "";
-        });
-      })
-      .catch((cause: unknown) => {
-        if (!stale) setError(String(cause));
-      });
-    return () => {
-      stale = true;
-    };
-  }, [bootstrap.user?.id, tenantId, setError]);
-
-  useEffect(() => {
-    setDraft((current) =>
-      current.serviceSpaceId === spaceId
-        ? current
-        : { ...current, serviceSpaceId: spaceId, serviceObjectId: "" },
-    );
-  }, [spaceId]);
-
-  useEffect(() => {
-    if (!bootstrap.user || !spaceId) {
-      setObjects([]);
-      setCases([]);
-      return;
-    }
-    let stale = false;
-    void Promise.all([api.objects(spaceId), api.cases(spaceId)])
-      .then(([nextObjects, nextCases]) => {
-        if (stale) return;
-        setObjects(nextObjects);
-        setCases(nextCases);
-      })
-      .catch((cause: unknown) => {
-        if (!stale) setError(String(cause));
-      });
-    return () => {
-      stale = true;
-    };
-  }, [bootstrap.user?.id, spaceId, setError]);
-
-  useEffect(() => {
-    const selectedCase = bootstrap.activeCase;
+    const target = workspaceOpen ? workspaceTarget : null;
     if (
-      !workspaceOpen ||
+      !target ||
       modelSettingsOpen ||
       !modelReady ||
       !bootstrap.user ||
-      !selectedCase ||
-      selectedCase.status === "closed" ||
-      native?.caseId === selectedCase.id
-    )
+      native?.customerId === target.id
+    ) {
       return;
+    }
     let stale = false;
-    void connect(selectedCase).catch((cause: unknown) => {
+    void connect(target).catch((cause: unknown) => {
       if (!stale) setError(String(cause));
     });
     return () => {
       stale = true;
     };
-    // 只有进入案例工作区后才连接 native Root；案例首页不会占用工作区 socket。
   }, [
-    bootstrap.activeCase?.id,
-    bootstrap.activeCase?.status,
     bootstrap.user?.id,
-    native?.caseId,
-    modelSettingsOpen,
     modelReady,
+    modelSettingsOpen,
+    native?.customerId,
     setError,
     workspaceOpen,
+    workspaceTarget?.id,
   ]);
 
-  useEffect(() => () => socket?.close(), [socket]);
+  useEffect(() => () => socketRef.current?.close(), []);
 
-  function selectSpace(nextSpaceId: string) {
-    setSpaceId(nextSpaceId);
-    setDraft((current) => ({ ...current, serviceSpaceId: nextSpaceId, serviceObjectId: "" }));
-  }
-
-  function openNewCase() {
+  function openNewCustomer() {
     setModelSettingsOpen(false);
-    setDraft({
-      serviceSpaceId: spaceId,
-      serviceObjectId: "",
-      title: "",
-      category: "general",
-    });
-    setCaseDialogOpen(true);
+    setCustomerDraft({ tenantId, name: "", type: "" });
+    setCustomerDialogOpen(true);
   }
 
-  function openCase(item: EnterpriseCase) {
+  function openCustomer(customer: Customer) {
     void run(async () => {
       setModelSettingsOpen(false);
-      if (activeCase?.id !== item.id) {
-        disconnect();
-        await api.activateCase(item.id, bootstrap.csrfToken);
-        await refresh();
+      setCustomerDialogOpen(false);
+      if (activeCustomer?.id === customer.id) {
+        setWorkspaceOpen(true);
+        return;
       }
-      setSpaceId(item.serviceSpaceId);
-      setCaseDialogOpen(false);
+      disconnect();
+      await api.activateCustomer(customer.id, bootstrap.csrfToken);
+      const next = await refresh();
+      if (next.activeCustomer?.id !== customer.id) {
+        throw new Error("Customer activation did not return the selected workspace");
+      }
       setWorkspaceOpen(true);
     });
   }
 
   function returnHome() {
     disconnect();
-    setCaseDialogOpen(false);
+    setCustomerDialogOpen(false);
     setModelSettingsOpen(false);
-    setWorkspaceOpen(false);
   }
 
   function openModelSettings() {
     disconnect();
+    setCustomerDialogOpen(false);
     setModelSettingsOpen(true);
   }
 
-  function createCase(submittedDraft: CaseDraft) {
+  function createCustomer(submitted: CustomerDraft) {
     void run(async () => {
-      const normalizedDraft = {
-        ...submittedDraft,
-        category: submittedDraft.category.trim() || "general",
-      };
-      const created = await api.createCase(normalizedDraft, bootstrap.csrfToken);
-      setSpaceId(normalizedDraft.serviceSpaceId);
-      setCases(await api.cases(normalizedDraft.serviceSpaceId));
-      setDraft({
-        serviceSpaceId: normalizedDraft.serviceSpaceId,
-        serviceObjectId: "",
-        title: "",
-        category: "general",
-      });
+      const created = await api.createCustomer(
+        { ...submitted, tenantId, name: submitted.name.trim() },
+        bootstrap.csrfToken,
+      );
       disconnect();
-      await api.activateCase(created.id, bootstrap.csrfToken);
-      await refresh();
-      setCaseDialogOpen(false);
+      await api.activateCustomer(created.id, bootstrap.csrfToken);
+      const next = await refresh();
+      if (next.activeCustomer?.id !== created.id) {
+        throw new Error("Customer activation did not return the newly created workspace");
+      }
+      setCustomers((current) => [...current.filter((item) => item.id !== created.id), created]);
+      setCustomerDialogOpen(false);
       setWorkspaceOpen(true);
     });
   }
 
-  async function createSpace(name: string) {
-    await run(async () => {
-      const created = await api.createSpace(tenantId, name, bootstrap.csrfToken);
-      setSpaces(await api.spaces(tenantId));
-      selectSpace(created.id);
-    });
-  }
-
-  async function createObject(name: string, type: string) {
-    await run(async () => {
-      const created = await api.createObject(spaceId, name, type, bootstrap.csrfToken);
-      setObjects(await api.objects(spaceId));
-      setDraft((current) => ({
-        ...current,
-        serviceSpaceId: spaceId,
-        serviceObjectId: created.id,
-      }));
-    });
-  }
-
   function changeTenant(nextTenantId: string) {
+    if (nextTenantId === tenantId) return;
+    disconnect();
     setModelSettingsOpen(false);
     setTenantId(nextTenantId);
-    setSpaceId("");
-    setSpaces([]);
-    setObjects([]);
-    setCases([]);
-    setDraft((current) => ({ ...current, serviceSpaceId: "", serviceObjectId: "" }));
+    setCustomers([]);
+    setCustomerDraft((current) => ({ ...current, tenantId: nextTenantId, name: "", type: "" }));
   }
 
+  function logout() {
+    void run(async () => {
+      disconnect();
+      setModelSettingsOpen(false);
+      await api.logout(bootstrap.csrfToken);
+      setCustomers([]);
+      await refresh();
+    });
+  }
+
+  const enterpriseContext: EnterpriseRootContext = {
+    user: bootstrap.user
+      ? {
+          id: bootstrap.user.id,
+          email: bootstrap.user.email,
+          displayName: bootstrap.user.displayName,
+        }
+      : null,
+    tenants: bootstrap.tenants,
+    activeTenantId: tenantId || null,
+    customers:
+      customers.length > 0
+        ? customers
+        : activeCustomer
+          ? [{ id: activeCustomer.id, name: activeCustomer.name }]
+          : [],
+    activeCustomerId: activeCustomer?.id ?? null,
+    onSelectCustomer: (customerId) => {
+      const customer = customers.find((item) => item.id === customerId);
+      if (customer) openCustomer(customer);
+    },
+    onSelectTenant: changeTenant,
+    onOpenModelSettings: openModelSettings,
+    onOpenCustomerHome: returnHome,
+    onLogout: logout,
+  };
+
   const workspace =
-    workspaceOpen && activeCase ? (
+    workspaceTarget && workspaceOpen ? (
       <EnterpriseCaseWorkspace
-        activeCase={activeCase}
+        activeCustomer={workspaceTarget}
         modelReady={modelReady}
         modelStatusLoaded={modelStatusLoaded}
-        cases={cases}
         t={t}
-        busy={busy}
         native={native}
         platform={platform}
-        csrfToken={bootstrap.csrfToken}
         onError={setError}
         onBack={returnHome}
-        onNewCase={openNewCase}
         onOpenModelSettings={openModelSettings}
-        onSelectCase={(caseId) => {
-          const next = cases.find((item) => item.id === caseId);
-          if (next) openCase(next);
-        }}
-        onStatusChange={(status) =>
-          void run(async () => {
-            await api.updateCaseStatus(activeCase.id, status, bootstrap.csrfToken);
-            const next = await refresh();
-            if (status === "closed" || !next.activeCase) {
-              disconnect();
-              setWorkspaceOpen(false);
-            }
-          })
-        }
+        enterpriseContext={enterpriseContext}
       />
     ) : (
       <EnterpriseCaseHome
         t={t}
         tenantName={tenantName}
-        spaces={spaces}
-        spaceId={spaceId}
-        cases={cases}
-        activeCaseId={activeCase?.id}
+        customers={customers}
+        activeCustomerId={activeCustomer?.id}
         busy={busy}
-        onSpaceChange={selectSpace}
-        onOpenCase={openCase}
-        onNewCase={openNewCase}
+        onOpenCustomer={openCustomer}
+        onCreateCustomer={openNewCustomer}
         onOpenModelSettings={openModelSettings}
       />
     );
 
-  const selectedTenant = bootstrap.tenants.find((tenant) => tenant.id === tenantId);
   const modelSettings = modelSettingsOpen ? (
     <EnterpriseModelSettings
       tenantId={tenantId}
@@ -339,67 +277,31 @@ export function EnterpriseApp({
   ) : null;
 
   return (
-    <div className="flex h-dvh min-h-dvh flex-col bg-background text-ui-base text-foreground">
-      <EnterpriseTopBar
-        t={t}
-        user={bootstrap.user}
-        tenants={bootstrap.tenants}
-        tenantId={tenantId}
-        busy={busy}
-        tenantLocked={workspaceOpen || modelSettingsOpen}
-        onTenantChange={changeTenant}
-        onLogout={() =>
-          void run(async () => {
-            disconnect();
-            setWorkspaceOpen(false);
-            setModelSettingsOpen(false);
-            await api.logout(bootstrap.csrfToken);
-            await refresh();
-          })
-        }
-      />
-      {error ? (
-        <div
-          role="alert"
-          className="flex shrink-0 items-center gap-3 border-b border-destructive bg-card px-3 py-2 text-ui-caption text-destructive sm:px-4"
-        >
-          <span className="min-w-0 flex-1">{error}</span>
-          <button type="button" className={button} onClick={() => location.reload()}>
-            {t.retry}
-          </button>
-        </div>
-      ) : null}
-      {!bootstrap.user ? (
-        <EnterpriseLogin
-          t={t}
-          busy={busy}
-          onLogin={(email, password) =>
-            void run(async () => {
-              await api.login(email, password, bootstrap.csrfToken);
-              const next = await refresh();
-              setTenantId(next.tenants[0]?.id ?? "");
-            })
-          }
-        />
-      ) : (
-        (modelSettings ?? workspace)
-      )}
-      {bootstrap.user && caseDialogOpen ? (
-        <EnterpriseCaseForm
-          t={t}
-          spaces={spaces}
-          spaceId={spaceId}
-          objects={objects}
-          draft={draft}
-          setDraft={setDraft}
-          busy={busy}
-          onSpaceChange={selectSpace}
-          onCreateSpace={createSpace}
-          onCreateObject={createObject}
-          onCreate={createCase}
-          onCancel={() => setCaseDialogOpen(false)}
-        />
-      ) : null}
-    </div>
+    <EnterpriseAppLayout
+      t={t}
+      user={bootstrap.user}
+      tenants={bootstrap.tenants}
+      tenantId={tenantId}
+      busy={busy}
+      modelSettingsOpen={modelSettingsOpen}
+      workspaceOpen={workspaceOpen}
+      error={error}
+      workspace={workspace}
+      modelSettings={modelSettings}
+      customerDialogOpen={customerDialogOpen}
+      customerDraft={customerDraft}
+      setCustomerDraft={setCustomerDraft}
+      onTenantChange={changeTenant}
+      onLogout={logout}
+      onLogin={(email, password) =>
+        void run(async () => {
+          await api.login(email, password, bootstrap.csrfToken);
+          const next = await refresh();
+          setTenantId(next.tenants[0]?.id ?? "");
+        })
+      }
+      onCreateCustomer={createCustomer}
+      onCancelCustomer={() => setCustomerDialogOpen(false)}
+    />
   );
 }

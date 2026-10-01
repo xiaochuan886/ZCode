@@ -1,29 +1,38 @@
 import { randomBytes } from "node:crypto";
 import type { EnterpriseStore } from "./store.js";
-import type { EnterpriseCase } from "./types.js";
-import { prepareCaseWorkspace } from "./materialize.js";
+import type { Customer } from "./types.js";
+import { EnterpriseError } from "./types.js";
+import { prepareCustomerWorkspace } from "./materialize.js";
 import type { RelayCredential } from "./mcp-relay.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
-import {
-  enterpriseModelProviders,
-  provisionCaseModelProviders,
-  type EnterpriseModelProvider,
-  type ModelRelayCapability,
-} from "./model-provision.js";
+import { provisionCustomerModelProvider } from "./model-provision.js";
+import type { GatewayModelCredential } from "./model-credentials.js";
 
-export async function prepare(
-  value: EnterpriseCase,
+function tenantModelCredential(
+  store: EnterpriseStore,
+  tenantId: string,
+): GatewayModelCredential | null {
+  try {
+    return store.getModelCredentialForGateway(tenantId, "custom");
+  } catch (error) {
+    if (error instanceof EnterpriseError && error.code === "not_found") return null;
+    throw error;
+  }
+}
+
+/** Prepare the stable Customer workspace without replacing its native context files. */
+export async function prepareCustomer(
+  value: Customer,
   store: EnterpriseStore,
   userId: string,
   relayOrigin: string,
   relayCredentials: Map<string, Map<string, RelayCredential>>,
   modelRuntimeDataRoot: string | undefined,
-  modelRelayCapabilities: Map<string, Map<EnterpriseModelProvider, ModelRelayCapability>>,
 ): Promise<void> {
-  const skills = store.listSkillsForCase(userId, value.id);
-  const bindings = store.listMcpBindingsForCase(userId, value.id);
+  const skills = store.listSkillsForCustomer(userId, value.id);
+  const bindings = store.listMcpBindingsForCustomer(userId, value.id);
   const mcpServers: Record<string, Record<string, unknown>> = {};
-  const caseCredentials = new Map<string, RelayCredential>();
+  const customerCredentials = new Map<string, RelayCredential>();
   for (const binding of bindings) {
     if (binding.tenantId !== value.tenantId) {
       process.emitWarning(`MCP binding ${binding.id} skipped: tenant binding is invalid.`, {
@@ -55,7 +64,7 @@ export async function prepare(
       }
     }
     const token = randomBytes(32).toString("base64url");
-    caseCredentials.set(binding.id, { token, actorId: userId });
+    customerCredentials.set(binding.id, { token, actorId: userId });
     const relayUrl = new URL(
       `/api/enterprise/mcp-relay/${encodeURIComponent(value.id)}/${encodeURIComponent(binding.id)}`,
       relayOrigin,
@@ -66,15 +75,8 @@ export async function prepare(
       headers: { Authorization: `Bearer ${token}` },
     };
   }
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath: value.workspacePath,
-    caseContext: {
-      caseId: value.id,
-      title: value.title,
-      category: value.category,
-      serviceObject: value.objectSnapshot,
-      contextSnapshot: value.contextSnapshot,
-    },
     sharedSkills: skills.map((skill) => ({
       id: skill.id,
       name: skill.name,
@@ -84,20 +86,12 @@ export async function prepare(
     mcpServers,
   });
   if (modelRuntimeDataRoot) {
-    const configured = new Set(
-      store
-        .listModelCredentialStatuses(userId, value.tenantId)
-        .filter((credential) => credential.configured)
-        .map((credential) => credential.providerFamily),
-    );
-    const capabilities = await provisionCaseModelProviders({
-      caseId: value.id,
-      actorId: userId,
-      relayOrigin,
+    await provisionCustomerModelProvider({
+      customerId: value.id,
+      tenantId: value.tenantId,
       runtimeDataRoot: modelRuntimeDataRoot,
-      configuredProviders: enterpriseModelProviders.filter((provider) => configured.has(provider)),
+      credential: tenantModelCredential(store, value.tenantId),
     });
-    modelRelayCapabilities.set(value.id, capabilities);
   }
-  relayCredentials.set(value.id, caseCredentials);
+  relayCredentials.set(value.id, customerCredentials);
 }

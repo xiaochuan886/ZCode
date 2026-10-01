@@ -26,6 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import {
+  Building2,
+  FolderOpen,
   PencilRuler,
   Globe,
   Loader2,
@@ -44,6 +46,7 @@ import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 import { WorkspaceWebRemoteControlTrigger } from "@/WorkspaceWebRemoteControlTrigger.js";
 import {
   WorkspaceSidebarFooterPlanBadge,
@@ -84,6 +87,13 @@ function getAvatarFallbackText(user: UserInfo | null | undefined): string {
   return source[0]?.toUpperCase() ?? "Z";
 }
 
+function getEnterpriseProfileName(context?: EnterpriseRootContext): string {
+  const displayName = context?.user?.displayName?.trim();
+  if (displayName) return displayName;
+  const email = context?.user?.email?.trim();
+  return email || "Enterprise";
+}
+
 export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterComponent({
   theme,
   localeMenuValue,
@@ -96,6 +106,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onLogout,
   settingsButtonMode = "settings",
   user,
+  enterpriseContext,
+  enterpriseManagedModel = false,
   workspacePath,
   workspaceIdentity,
   workspaceRemoteSessionId,
@@ -116,6 +128,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onLogout?: () => void;
   settingsButtonMode?: "settings" | "back";
   user?: UserInfo | null;
+  enterpriseContext?: EnterpriseRootContext;
+  enterpriseManagedModel?: boolean;
   workspacePath?: string;
   workspaceIdentity?: string;
   workspaceRemoteSessionId?: string;
@@ -131,12 +145,19 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   const zoomOutShortcutLabel = useShortcutCommandLabel("zoomOut");
   const resetZoomShortcutLabel = useShortcutCommandLabel("resetZoom");
   const isRestoringOAuthSession = useZCodeStore((state) => state.isRestoringOAuthSession);
-  const profileBadge = getSidebarProfileBadge(user, intl.formatMessage);
-  const avatarFallbackText = getAvatarFallbackText(user);
-  const avatarKey = user?.avatarUrl ?? user?.id ?? "guest";
+  const enterpriseMode = enterpriseContext !== undefined;
+  const profileBadge = enterpriseMode
+    ? getEnterpriseProfileName(enterpriseContext)
+    : getSidebarProfileBadge(user, intl.formatMessage);
+  const avatarFallbackText = enterpriseMode
+    ? (getEnterpriseProfileName(enterpriseContext)[0]?.toUpperCase() ?? "E")
+    : getAvatarFallbackText(user);
+  const avatarKey = enterpriseMode
+    ? (enterpriseContext?.user?.id ?? "enterprise-guest")
+    : (user?.avatarUrl ?? user?.id ?? "guest");
   const showAuthRestoreLoading = !user && isRestoringOAuthSession;
   const usageSummaryState = useWorkspaceSidebarFooterUsageSummaryState({
-    enabled: true,
+    enabled: !enterpriseManagedModel && !enterpriseMode,
     workspaceIdentity,
     workspacePath,
   });
@@ -145,7 +166,9 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
       <Avatar key={avatarKey} size="default">
         {user?.avatarUrl ? <AvatarImage src={user.avatarUrl} alt={profileBadge} /> : null}
         <AvatarFallback className="bg-background text-foreground">
-          {user ? (
+          {enterpriseMode ? (
+            avatarFallbackText
+          ) : user ? (
             avatarFallbackText
           ) : showAuthRestoreLoading ? (
             <>
@@ -165,7 +188,9 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
           <span className="min-w-0 truncate text-ui-base font-semibold text-foreground">
             {profileBadge}
           </span>
-          {user ? <WorkspaceSidebarFooterPlanBadge state={usageSummaryState} /> : null}
+          {user && !enterpriseMode && !enterpriseManagedModel ? (
+            <WorkspaceSidebarFooterPlanBadge state={usageSummaryState} />
+          ) : null}
         </div>
       </div>
     </>
@@ -286,6 +311,30 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                 </DropdownMenuRadioGroup>
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+            {enterpriseMode && enterpriseContext?.tenants.length ? (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <Building2 className="size-4" />
+                  {intl.formatMessage({ id: "enterprise.switchTenant" })}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="w-56">
+                  <DropdownMenuRadioGroup
+                    value={enterpriseContext.activeTenantId ?? ""}
+                    onValueChange={(tenantId) => {
+                      if (tenantId !== enterpriseContext.activeTenantId) {
+                        void enterpriseContext.onSelectTenant?.(tenantId);
+                      }
+                    }}
+                  >
+                    {enterpriseContext.tenants.map((tenant) => (
+                      <DropdownMenuRadioItem key={tenant.id} value={tenant.id}>
+                        <span className="min-w-0 truncate">{tenant.name}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            ) : null}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <PencilRuler className="size-4" />
@@ -344,12 +393,38 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
               </DropdownMenuSub>
             ) : null}
             {/* 升级入口状态不再以菜单开关为生命周期边界。*/}
-            <WorkspaceSidebarFooterUsageSummaryContent
-              state={usageSummaryState}
-              onUsageClick={usageButtonClick}
-              onUpgradeClick={onUpgradeClick}
-            />
-            {onLogin && !user ? (
+            {!enterpriseMode && !enterpriseManagedModel ? (
+              <WorkspaceSidebarFooterUsageSummaryContent
+                state={usageSummaryState}
+                onUsageClick={usageButtonClick}
+                onUpgradeClick={onUpgradeClick}
+              />
+            ) : null}
+            {enterpriseMode &&
+            (enterpriseContext?.onOpenCustomerHome || enterpriseContext?.onOpenModelSettings) ? (
+              <>
+                <DropdownMenuSeparator />
+                {enterpriseContext.onOpenCustomerHome ? (
+                  <DropdownMenuItem
+                    onSelect={() => void enterpriseContext.onOpenCustomerHome?.()}
+                    data-testid="enterprise-customer-workspaces"
+                  >
+                    <FolderOpen className="size-4" />
+                    {intl.formatMessage({ id: "enterprise.customerWorkspaces" })}
+                  </DropdownMenuItem>
+                ) : null}
+                {enterpriseContext.onOpenModelSettings ? (
+                  <DropdownMenuItem
+                    onSelect={() => void enterpriseContext.onOpenModelSettings?.()}
+                    data-testid="enterprise-model-settings"
+                  >
+                    <Settings className="size-4" />
+                    {intl.formatMessage({ id: "enterprise.modelSettings" })}
+                  </DropdownMenuItem>
+                ) : null}
+              </>
+            ) : null}
+            {!enterpriseMode && onLogin && !user ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={onLogin} data-testid={TID_LOGIN_MENU_ITEM}>
@@ -358,7 +433,18 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                 </DropdownMenuItem>
               </>
             ) : null}
-            {onLogout ? (
+            {enterpriseMode ? (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onSelect={() => void enterpriseContext?.onLogout?.()}
+                  data-testid={TID_LOGOUT_BUTTON}
+                >
+                  <LogOut className="size-4" />
+                  {intl.formatMessage({ id: "app.logout" })}
+                </DropdownMenuItem>
+              </>
+            ) : onLogout ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onSelect={onLogout} data-testid={TID_LOGOUT_BUTTON}>

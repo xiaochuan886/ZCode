@@ -98,6 +98,8 @@ export function App({
   onLogout,
   onLogin,
   user,
+  enterpriseContext,
+  enterpriseManagedModel,
   reconnectingRemoteWorkspaceKeys,
   remoteWorkspaceErrorByWorkspaceKey,
   reconnectingRemoteWorkspaceLogsByWorkspaceKey = EMPTY_RECONNECTING_REMOTE_WORKSPACE_LOGS_BY_WORKSPACE_KEY,
@@ -406,6 +408,13 @@ export function App({
     [tabs],
   );
   const commandCenterWorkspaceTabs = useMemo(() => tabs.filter(isWorkspaceTab), [tabs]);
+  const enterpriseWorkspaceDisplayLabel = useMemo(() => {
+    const activeCustomerId = enterpriseContext?.activeCustomerId;
+    if (!activeCustomerId) {
+      return undefined;
+    }
+    return enterpriseContext.customers.find((customer) => customer.id === activeCustomerId)?.name;
+  }, [enterpriseContext]);
   const activeSidePaneTab = useMemo(() => getActiveSidePaneTab(sidePaneState), [sidePaneState]);
   const isBrowserOpen = activeSidePaneTab?.type === "browser";
   const isGitOpen = activeSidePaneTab?.type === "git";
@@ -1114,6 +1123,7 @@ export function App({
         activeTaskId={activeTaskId}
         activeTaskChangeSummary={activeTaskChangeSummary}
         workspaceTabs={commandCenterWorkspaceTabs}
+        workspaceDisplayLabel={enterpriseWorkspaceDisplayLabel}
         onOpenChange={setIsQuickPickOpen}
         onSelectTask={handleSelectTask}
         onSearchResultHighlightRequest={handleSearchResultHighlightRequest}
@@ -1141,6 +1151,8 @@ export function App({
         onLogout={onLogout}
         onLogin={onLogin}
         user={user}
+        enterpriseContext={enterpriseContext}
+        enterpriseManagedModel={enterpriseManagedModel}
         reconnectingRemoteWorkspaceKeys={reconnectingRemoteWorkspaceKeys}
         remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
         reconnectingRemoteWorkspaceLogsByWorkspaceKey={

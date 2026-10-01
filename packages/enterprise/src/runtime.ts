@@ -8,6 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 export interface RuntimeCase {
   id: string;
   workspacePath: string;
+  /** Stable runtime owner; defaults to the Customer id. */
+  runtimeId?: string;
 }
 export interface RuntimeHandle {
   id: string;
@@ -27,6 +29,7 @@ export interface RuntimeLifecycleHooks {
 }
 export interface RuntimeBinding {
   caseId: string;
+  runtimeId?: string;
   workspacePath: string;
   url: string;
   token: string;
@@ -42,14 +45,15 @@ export class RuntimeManager {
 
   async ensure(caseInfo: RuntimeCase, hooks: RuntimeLifecycleHooks = {}): Promise<RuntimeBinding> {
     if (this.shuttingDown) throw new Error("Runtime manager is shutting down");
-    const pending = this.pending.get(caseInfo.id);
+    const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+    const pending = this.pending.get(runtimeId);
     if (pending) return pending;
     const operation = this.ensureOnce(caseInfo, hooks);
-    this.pending.set(caseInfo.id, operation);
+    this.pending.set(runtimeId, operation);
     try {
       return await operation;
     } finally {
-      this.pending.delete(caseInfo.id);
+      this.pending.delete(runtimeId);
     }
   }
 
@@ -57,7 +61,9 @@ export class RuntimeManager {
     caseInfo: RuntimeCase,
     hooks: RuntimeLifecycleHooks,
   ): Promise<RuntimeBinding> {
-    const current = this.live.get(caseInfo.id);
+    const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+    const runtimeInput = { ...caseInfo, id: runtimeId, runtimeId };
+    const current = this.live.get(runtimeId);
     if (
       current?.binding.workspacePath === caseInfo.workspacePath &&
       (await this.adapter.healthy(current.handle, current.binding.token))
@@ -65,43 +71,50 @@ export class RuntimeManager {
       return current.binding;
     if (current) {
       hooks.beforeStop?.();
-      this.live.delete(caseInfo.id);
+      this.live.delete(runtimeId);
       await current.handle.stop();
     }
     // Case 工作区会被运行时写入；重新物化前先停止旧容器，再启动新运行时。
-    await this.adapter.stopStale?.(caseInfo);
+    await this.adapter.stopStale?.(runtimeInput);
     await hooks.beforeStart?.();
     const token = randomBytes(32).toString("base64url");
-    const handle = await this.adapter.start({ ...caseInfo, token });
+    const handle = await this.adapter.start({ ...runtimeInput, token });
     const binding = {
       caseId: caseInfo.id,
+      runtimeId,
       workspacePath: caseInfo.workspacePath,
       url: handle.url,
       token,
     };
-    this.live.set(caseInfo.id, { binding, handle });
+    this.live.set(runtimeId, { binding, handle });
     return binding;
   }
 
   getBinding(caseInfo: RuntimeCase): RuntimeBinding | null {
-    const current = this.live.get(caseInfo.id);
+    const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+    const current = this.live.get(runtimeId);
     return current?.binding.workspacePath === caseInfo.workspacePath ? current.binding : null;
   }
 
   async ownsSession(caseInfo: RuntimeCase, nativeSessionId: string): Promise<boolean> {
-    return this.adapter.ownsSession?.(caseInfo, nativeSessionId) ?? false;
+    const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+    return (
+      this.adapter.ownsSession?.({ ...caseInfo, id: runtimeId, runtimeId }, nativeSessionId) ??
+      false
+    );
   }
 
   async stop(caseInfo: RuntimeCase, beforeStop?: () => void): Promise<void> {
-    await this.pending.get(caseInfo.id);
+    const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+    await this.pending.get(runtimeId);
     beforeStop?.();
-    const current = this.live.get(caseInfo.id);
+    const current = this.live.get(runtimeId);
     if (current) {
-      this.live.delete(caseInfo.id);
+      this.live.delete(runtimeId);
       await current.handle.stop();
     } else {
       // 权限撤销和工作区更新也要清理上一 gateway 进程遗留的容器。
-      await this.adapter.stopStale?.(caseInfo);
+      await this.adapter.stopStale?.({ ...caseInfo, id: runtimeId, runtimeId });
     }
   }
 
@@ -151,7 +164,8 @@ async function ownsIndexedSession(
   caseInfo: RuntimeCase,
   nativeSessionId: string,
 ): Promise<boolean> {
-  const index = join(dataRoot, caseInfo.id, ".zcode", "v2", "tasks-index.sqlite");
+  const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
+  const index = join(dataRoot, runtimeId, ".zcode", "v2", "tasks-index.sqlite");
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(index, { readOnly: true });
@@ -189,6 +203,7 @@ export class ProcessRuntimeAdapter implements RuntimeAdapter {
         ZCODE_SERVER_HOST: "127.0.0.1",
         ZCODE_SERVER_WORKSPACE: input.workspacePath,
         ZCODE_SERVER_AUTH_TOKEN: input.token,
+        ZCODE_ENTERPRISE_MANAGED_MODEL: "1",
         HOME: dataDir,
         XDG_CONFIG_HOME: join(dataDir, "config"),
         XDG_DATA_HOME: join(dataDir, "data"),
@@ -296,6 +311,8 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
       `ZCODE_SERVER_WORKSPACE=${resolve(input.workspacePath)}`,
       "-e",
       `ZCODE_SERVER_AUTH_TOKEN=${input.token}`,
+      "-e",
+      "ZCODE_ENTERPRISE_MANAGED_MODEL=1",
       this.options.image,
     ]);
     const mapped = await this.docker(["port", id, "3030/tcp"]);
@@ -309,7 +326,8 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
       url: `http://127.0.0.1:${port}`,
       workspacePath: input.workspacePath,
       stop: async () => {
-        await this.removeContainer(id);
+        // removeContainer 使用 name filter；这里必须传启动时的容器名，不能传 Docker ID。
+        await this.removeContainer(name);
       },
     };
     await waitHealthy(this, handle, input.token);

@@ -3,6 +3,42 @@ import type { IServiceAccessor } from "@zcode/services";
 import type { ReactNode } from "react";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
 
+/** 企业壳层传给原生 Root 的展示和导航上下文。
+ *
+ * 客户摘要只包含稳定 ID 和展示名。切换客户必须由 Web/企业网关完成鉴权、关闭旧
+ * runtime 后重新挂载 Root，原生 UI 不接收也不打开目标 workspace 路径。
+ */
+export interface EnterpriseUserSummary {
+  id: string;
+  email: string;
+  displayName: string;
+}
+
+export interface EnterpriseTenantSummary {
+  id: string;
+  name: string;
+  role?: "admin" | "member";
+}
+
+export interface EnterpriseCustomerSummary {
+  id: string;
+  name: string;
+}
+
+export interface EnterpriseRootContext {
+  user: EnterpriseUserSummary | null;
+  tenants: readonly EnterpriseTenantSummary[];
+  activeTenantId: string | null;
+  customers: readonly EnterpriseCustomerSummary[];
+  activeCustomerId: string | null;
+  onSelectCustomer: (customerId: string) => void | Promise<void>;
+  /** 返回企业客户工作区首页，由 Web 壳层负责导航和鉴权。 */
+  onOpenCustomerHome?: () => void | Promise<void>;
+  onSelectTenant?: (tenantId: string) => void | Promise<void>;
+  onOpenModelSettings?: () => void | Promise<void>;
+  onLogout?: () => void | Promise<void>;
+}
+
 export interface RootProps {
   services: IServiceAccessor;
   platform: IPlatformService;
@@ -38,6 +74,8 @@ export interface RootProps {
   initialWorkspaceLoadingFallback?: ReactNode;
   /** 企业控制面已经提供租户模型连接时，原生入口仅按可用模型判断。 */
   enterpriseManagedModel?: boolean;
+  /** 企业壳层的用户、租户和客户摘要；不包含其他客户 workspace 路径。 */
+  enterpriseContext?: EnterpriseRootContext;
   /** Assistant code-comment 卡片灰度；默认关闭，关闭时保留原始 directive。 */
   assistantCodeCommentCardsEnabled?: boolean;
 }
@@ -56,4 +94,6 @@ export interface WorkspaceSettingsLayerProps {
   onLogin?: () => void;
   onLogout?: () => void;
   user?: UserInfo | null;
+  enterpriseContext?: EnterpriseRootContext;
+  enterpriseManagedModel?: boolean;
 }

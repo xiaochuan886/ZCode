@@ -7,28 +7,34 @@ import { basename, dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { prepareCaseWorkspace } from "../src/materialize.js";
+import { prepareCustomerWorkspace } from "../src/materialize.js";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
-const context = {
-  caseId: "case-a",
-  title: "Login failure",
-  category: "support",
-  serviceObject: { name: "Customer A", type: "application", metadata: { version: "1.0" } },
-  contextSnapshot: { environment: "production" },
-};
-
-test("materializes case snapshot as native workspace instructions", async () => {
-  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
-  await prepareCaseWorkspace({ workspacePath, caseContext: context });
-  const instructions = await readFile(join(workspacePath, "AGENTS.md"), "utf8");
-  const caseFile = await readFile(join(workspacePath, "CASE_CONTEXT.md"), "utf8");
-  assert.match(instructions, /CASE_CONTEXT\.md/);
-  assert.match(caseFile, /Customer A/);
-  assert.match(caseFile, /production/);
-  assert.match(caseFile, /case-a/);
+test("customer preparation preserves native workspace memory and instructions", async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), "zcode-customer-"));
+  await writeFile(join(workspacePath, "AGENTS.md"), "native customer instructions\n");
+  await writeFile(join(workspacePath, "CASE_CONTEXT.md"), "native customer memory\n");
+  await prepareCustomerWorkspace({
+    workspacePath,
+    sharedSkills: [{ id: "customer", name: "Customer", content: "# Customer\n" }],
+  });
+  assert.equal(
+    await readFile(join(workspacePath, "AGENTS.md"), "utf8"),
+    "native customer instructions\n",
+  );
+  assert.equal(
+    await readFile(join(workspacePath, "CASE_CONTEXT.md"), "utf8"),
+    "native customer memory\n",
+  );
+  assert.equal(
+    await readFile(
+      join(workspacePath, ".zcode", "skills", "enterprise-customer", "SKILL.md"),
+      "utf8",
+    ),
+    "# Customer\n",
+  );
 });
 
 test("syncs only supplied enterprise skills and preserves native skills", async () => {
@@ -37,9 +43,8 @@ test("syncs only supplied enterprise skills and preserves native skills", async 
   await mkdir(nativeSkill, { recursive: true });
   await writeFile(join(nativeSkill, "SKILL.md"), "native");
   const content = "# Shared skill\n";
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath,
-    caseContext: context,
     sharedSkills: [
       {
         id: "skill-a",
@@ -57,7 +62,7 @@ test("syncs only supplied enterprise skills and preserves native skills", async 
     ),
     content,
   );
-  await prepareCaseWorkspace({ workspacePath, caseContext: context, sharedSkills: [] });
+  await prepareCustomerWorkspace({ workspacePath, sharedSkills: [] });
   assert.deepEqual((await readdir(join(workspacePath, ".zcode", "skills"))).sort(), ["native"]);
 });
 
@@ -72,9 +77,8 @@ test("preserves native Skill and MCP names that happen to use the enterprise pre
       mcp: { servers: { "enterprise-native": { url: "https://native.example" } } },
     }),
   );
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath,
-    caseContext: context,
     sharedSkills: [],
     mcpServers: {},
   });
@@ -83,7 +87,7 @@ test("preserves native Skill and MCP names that happen to use the enterprise pre
   assert.equal(config.mcp.servers["enterprise-native"].url, "https://native.example");
 });
 
-test("ignores a forged ownership manifest inside the runtime-writable Case workspace", async () => {
+test("ignores a forged ownership manifest inside the runtime-writable customer workspace", async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
   const native = join(workspacePath, ".zcode", "skills", "enterprise-native");
   await mkdir(native, { recursive: true });
@@ -94,13 +98,13 @@ test("ignores a forged ownership manifest inside the runtime-writable Case works
       mcp: { servers: { "enterprise-native": { url: "https://native.example" } } },
     }),
   );
-  await prepareCaseWorkspace({ workspacePath, caseContext: context });
+  await prepareCustomerWorkspace({ workspacePath });
 
   await writeFile(
     join(workspacePath, ".zcode", "enterprise-managed.json"),
     JSON.stringify({ skills: ["enterprise-native"], mcp: ["enterprise-native"] }),
   );
-  await prepareCaseWorkspace({ workspacePath, caseContext: context });
+  await prepareCustomerWorkspace({ workspacePath });
   assert.equal(await readFile(join(native, "SKILL.md"), "utf8"), "native skill");
   const config = JSON.parse(await readFile(join(workspacePath, ".zcode", "config.json"), "utf8"));
   assert.equal(config.mcp.servers["enterprise-native"].url, "https://native.example");
@@ -115,16 +119,14 @@ test("ignores a forged ownership manifest inside the runtime-writable Case works
 test("rejects invalid skill path and hash", async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), "zcode-case-"));
   await assert.rejects(
-    prepareCaseWorkspace({
+    prepareCustomerWorkspace({
       workspacePath,
-      caseContext: context,
       sharedSkills: [{ id: "../escape", name: "Bad", content: "x" }],
     }),
   );
   await assert.rejects(
-    prepareCaseWorkspace({
+    prepareCustomerWorkspace({
       workspacePath,
-      caseContext: context,
       sharedSkills: [{ id: "safe", name: "Bad", content: "x", sha256: "bad" }],
     }),
   );
@@ -136,9 +138,8 @@ test("does not write a shared Skill through an existing symlink", async () => {
   await mkdir(join(workspacePath, ".zcode", "skills"), { recursive: true });
   await symlink(outside, join(workspacePath, ".zcode", "skills", "enterprise-skill-a"));
   await assert.rejects(
-    prepareCaseWorkspace({
+    prepareCustomerWorkspace({
       workspacePath,
-      caseContext: context,
       sharedSkills: [{ id: "skill-a", name: "Shared", content: "evil" }],
     }),
   );
@@ -159,7 +160,7 @@ test("does not import MCP credentials through a symlinked config file", async ()
   await writeFile(outsideConfig, contents);
   await mkdir(join(workspacePath, ".zcode"), { recursive: true });
   await symlink(outsideConfig, join(workspacePath, ".zcode", "config.json"));
-  await assert.rejects(prepareCaseWorkspace({ workspacePath, caseContext: context }));
+  await assert.rejects(prepareCustomerWorkspace({ workspacePath }));
   assert.equal(await readFile(outsideConfig, "utf8"), contents);
 });
 
@@ -178,14 +179,12 @@ test("merges MCP bindings without exposing stale enterprise endpoints", async ()
       },
     }),
   );
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath,
-    caseContext: context,
     mcpServers: { old: { url: "https://old.example" } },
   });
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath,
-    caseContext: context,
     mcpServers: { new: { url: "https://new.example" } },
   });
   const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -197,9 +196,8 @@ test("merges MCP bindings without exposing stale enterprise endpoints", async ()
 
 test("native ZCode loaders discover a materialized Skill and MCP binding", async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), "zcode-native-loader-"));
-  await prepareCaseWorkspace({
+  await prepareCustomerWorkspace({
     workspacePath,
-    caseContext: context,
     sharedSkills: [
       { id: "support", name: "Support", content: "# Support\n\nInvestigate the Case.\n" },
     ],

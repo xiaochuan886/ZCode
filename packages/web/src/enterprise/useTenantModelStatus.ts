@@ -53,7 +53,7 @@ export function useTenantModelStatus(
   }, [userId, tenantId, setError]);
 
   return {
-    modelReady: statuses.some((status) => status.configured),
+    modelReady: statuses.some((status) => status.providerFamily === "custom" && status.configured),
     modelStatusLoaded: loaded,
     refresh,
   };

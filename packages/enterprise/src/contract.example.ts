@@ -1,4 +1,4 @@
-import type { EnterpriseCaseReader } from "./contract.js";
-export function currentCase(reader: EnterpriseCaseReader, sessionId: string) {
-  return reader.getActiveCase(sessionId);
+import type { EnterpriseCustomerReader } from "./contract.js";
+export function currentCustomer(reader: EnterpriseCustomerReader, sessionId: string) {
+  return reader.getActiveCustomer(sessionId);
 }

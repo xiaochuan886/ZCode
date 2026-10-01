@@ -1,5 +1,4 @@
 export type Role = "admin" | "member";
-export type CaseStatus = "open" | "in_progress" | "resolved" | "closed";
 export interface Tenant {
   id: string;
   name: string;
@@ -16,53 +15,36 @@ export interface Membership {
   userId: string;
   role: Role;
 }
-export interface ServiceSpace {
+export interface Customer {
   id: string;
   tenantId: string;
-  name: string;
-  createdAt: string;
-}
-export interface ServiceObject {
-  id: string;
-  tenantId: string;
-  serviceSpaceId: string;
   name: string;
   type: string;
   metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-}
-export interface ObjectSnapshot {
-  name: string;
-  type: string;
-  metadata: Record<string, unknown>;
-}
-export interface EnterpriseCase {
-  id: string;
-  tenantId: string;
-  serviceSpaceId: string;
-  serviceObjectId: string;
-  title: string;
-  category: string;
-  status: CaseStatus;
   workspacePath: string;
-  objectSnapshot: ObjectSnapshot;
-  contextSnapshot: Record<string, unknown>;
-  nativeSessionId: string | null;
   createdAt: string;
   updatedAt: string;
+  lastUsedAt: string | null;
+}
+export type EnterpriseRuntimeKind = "customer";
+export interface EnterpriseRuntimeTarget {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  workspacePath: string;
+  runtimeId: string;
+  kind: EnterpriseRuntimeKind;
 }
 export interface EnterpriseSession {
   id: string;
   userId: string;
-  activeCaseId: string | null;
+  activeCustomerId: string | null;
   expiresAt: string;
 }
 export interface SharedSkill {
   id: string;
   tenantId: string;
-  serviceSpaceId: string | null;
-  sourceCaseId: string;
+  sourceCustomerId: string;
   name: string;
   content: string;
   contentHash: string;
@@ -71,7 +53,7 @@ export interface SharedSkill {
 export interface McpBinding {
   id: string;
   tenantId: string;
-  serviceSpaceId: string | null;
+  customerId: string | null;
   name: string;
   endpoint: string;
   secretRef: string | null;

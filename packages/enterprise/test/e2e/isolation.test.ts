@@ -74,32 +74,23 @@ test(
     const hash = await EnterpriseAuth.hashPassword(password);
     const a = store.bootstrapAdmin("Tenant A", "a@example.test", hash);
     const b = store.bootstrapAdmin("Tenant B", "b@example.test", hash);
-    const spaceA = store.createServiceSpace(a.user.id, a.tenant.id, { name: "A space" });
-    const spaceA2 = store.createServiceSpace(a.user.id, a.tenant.id, { name: "A second space" });
-    const spaceB = store.createServiceSpace(b.user.id, b.tenant.id, { name: "B space" });
     store.provisionUser(a.user.id, a.tenant.id, {
       email: "a-member@example.test",
       passwordHash: hash,
       role: "member",
     });
-    const objectA = store.createServiceObject(a.user.id, spaceA.id, {
-      name: "Object A",
-      type: "application",
+    const caseA = await store.createCustomer(a.user.id, a.tenant.id, {
+      name: "A customer",
+      type: "account",
     });
-    const objectB = store.createServiceObject(b.user.id, spaceB.id, {
-      name: "Object B",
-      type: "application",
+    const caseA2 = await store.createCustomer(a.user.id, a.tenant.id, {
+      name: "A second customer",
+      type: "account",
     });
-    const caseA = store.createCase(a.user.id, objectA.id, { title: "A case", category: "support" });
-    const objectA2 = store.createServiceObject(a.user.id, spaceA2.id, {
-      name: "Object A2",
-      type: "application",
+    const caseB = await store.createCustomer(b.user.id, b.tenant.id, {
+      name: "B customer",
+      type: "account",
     });
-    const caseA2 = store.createCase(a.user.id, objectA2.id, {
-      title: "A second case",
-      category: "support",
-    });
-    const caseB = store.createCase(b.user.id, objectB.id, { title: "B case", category: "support" });
     // The native session RPC requires a selectable model. This local test provider
     // never receives a request because the smoke test only creates and resumes a session.
     const providerConfigDir = join(root, "runtime-data", caseB.id, ".zcode", "v2");
@@ -117,7 +108,7 @@ test(
         },
       }),
     );
-    store.createSkill(a.user.id, caseA.id, {
+    await store.createCustomerSkill(a.user.id, caseA.id, {
       name: "Private A",
       content: "---\nname: private-a\ndescription: Tenant A only\n---\n# Private A\n",
     });
@@ -128,7 +119,7 @@ test(
       [a.tenant.id]: ["https://knowledge-a.example.test"],
     });
     process.env[secretRef] = secret;
-    store.createMcpBinding(a.user.id, a.tenant.id, {
+    await store.createCustomerMcpBinding(a.user.id, caseA.id, {
       name: "knowledge-a",
       endpoint: "https://knowledge-a.example.test/mcp",
       secretRef,
@@ -175,7 +166,7 @@ test(
       id: string,
       session: { cookie: string; csrf: string },
     ): Promise<Response> {
-      return fetch(`${base}/api/enterprise/cases/${id}/activate`, {
+      return fetch(`${base}/api/enterprise/customers/${id}/activate`, {
         method: "POST",
         headers: { cookie: session.cookie, origin: base, "x-csrf-token": session.csrf },
       });
@@ -194,23 +185,7 @@ test(
       assert.equal((await activate(caseB.id, sessionA)).status, 404);
       assert.equal(
         (
-          await fetch(`${base}/api/enterprise/cases?serviceSpaceId=${spaceB.id}`, {
-            headers: { cookie: sessionA.cookie },
-          })
-        ).status,
-        404,
-      );
-      assert.equal(
-        (
-          await fetch(`${base}/api/enterprise/objects?serviceSpaceId=${spaceB.id}`, {
-            headers: { cookie: sessionA.cookie },
-          })
-        ).status,
-        404,
-      );
-      assert.equal(
-        (
-          await fetch(`${base}/api/enterprise/spaces?tenantId=${b.tenant.id}`, {
+          await fetch(`${base}/api/enterprise/customers?tenantId=${b.tenant.id}`, {
             headers: { cookie: sessionA.cookie },
           })
         ).status,
@@ -228,24 +203,14 @@ test(
       assert.match(JSON.stringify(await infoA.json()), new RegExp(caseA.id));
       assert.match(JSON.stringify(await infoB.json()), new RegExp(caseB.id));
       const nativeSessionId = await smokeNativeSession(base, sessionB.cookie, caseB.workspacePath);
-      const mappedSession = await fetch(`${base}/api/enterprise/cases/${caseB.id}/session`, {
-        method: "POST",
-        headers: {
-          cookie: sessionB.cookie,
-          origin: base,
-          "x-csrf-token": sessionB.csrf,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ sessionId: nativeSessionId }),
-      });
-      assert.equal(mappedSession.status, 200);
+      assert.ok(nativeSessionId);
       const restoredCase = await fetch(`${base}/api/enterprise/bootstrap`, {
         headers: { cookie: sessionB.cookie },
       });
-      assert.equal(
-        ((await restoredCase.json()) as { activeCase: { sessionId: string } }).activeCase.sessionId,
-        nativeSessionId,
-      );
+      const restoredBootstrap = (await restoredCase.json()) as {
+        activeCustomer: { id: string } | null;
+      };
+      assert.equal(restoredBootstrap.activeCustomer?.id, caseB.id);
 
       const bindingB = runtimes.getBinding(caseB);
       assert.ok(bindingB);
@@ -272,14 +237,6 @@ test(
         ]),
       );
 
-      assert.match(
-        await readFile(join(caseA.workspacePath, "CASE_CONTEXT.md"), "utf8"),
-        /Object A/,
-      );
-      assert.doesNotMatch(
-        await readFile(join(caseB.workspacePath, "CASE_CONTEXT.md"), "utf8"),
-        /Object A/,
-      );
       const configB = await readFile(join(caseB.workspacePath, ".zcode", "config.json"), "utf8");
       assert.ok(!configB.includes("knowledge-a.example.test"));
       assert.ok(!configB.includes(secret));
@@ -321,7 +278,7 @@ test(
             caseA.workspacePath,
             ".zcode",
             "skills",
-            `enterprise-${store.listSkillsForCase(a.user.id, caseA.id)[0]!.id}`,
+            `enterprise-${store.listSkillsForCustomer(a.user.id, caseA.id)[0]!.id}`,
             "SKILL.md",
           ),
           "utf8",
@@ -358,28 +315,7 @@ test(
       assert.match(JSON.stringify(await switched.json()), new RegExp(caseA2.id));
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
 
-      const status = async (next: string) =>
-        fetch(`${base}/api/enterprise/cases/${caseA.id}/status`, {
-          method: "PATCH",
-          headers: {
-            cookie: sessionA.cookie,
-            origin: base,
-            "x-csrf-token": sessionA.csrf,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ status: next }),
-        });
-      for (const next of ["in_progress", "resolved", "closed"]) {
-        assert.equal((await status(next)).status, 200);
-      }
-      assert.equal(runtimes.getBinding(caseA), null);
-      assert.equal((await activate(caseA.id, sessionA)).status, 400);
-      assert.equal((await status("in_progress")).status, 200);
       assert.equal((await activate(caseA.id, sessionA)).status, 200);
-      assert.match(
-        await readFile(join(caseA.workspacePath, "CASE_CONTEXT.md"), "utf8"),
-        /Object A/,
-      );
 
       store.removeMembership(
         a.user.id,
@@ -396,6 +332,188 @@ test(
       delete process.env[secretRef];
       if (previousAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
       else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = previousAllowlist;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "container gateway shares one Customer runtime across native sessions",
+  { skip: !enabled },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "zcode-enterprise-customer-e2e-"));
+    const workspaceRoot = join(root, "workspaces");
+    const dbPath = join(root, "enterprise.sqlite");
+    const password = "e2e-customer-password";
+    const hash = await EnterpriseAuth.hashPassword(password);
+
+    const store = await EnterpriseStore.open(dbPath, workspaceRoot);
+    const initial = store.bootstrapAdmin("Customer Tenant", "customer@example.test", hash);
+    const customerA = await store.createCustomer(initial.user.id, initial.tenant.id, {
+      name: "First customer",
+      type: "account",
+    });
+    const customerB = await store.createCustomer(initial.user.id, initial.tenant.id, {
+      name: "Second customer",
+      type: "account",
+    });
+
+    const runtimeDataRoot = join(root, "runtime-data");
+    async function seedNativeModelConfig(runtimeId: string): Promise<void> {
+      // ContainerRuntimeAdapter mounts runtimeDataRoot/<runtimeId> as HOME;
+      // native provider configuration therefore belongs in that data mount.
+      const configDir = join(runtimeDataRoot, runtimeId, ".zcode", "v2");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "config.json"),
+        JSON.stringify({
+          provider: {
+            "enterprise-e2e-local": {
+              name: "Enterprise E2E local",
+              kind: "openai-compatible",
+              options: { baseURL: "http://127.0.0.1:9/v1", apiKey: "test-only-key" },
+              models: { "e2e-no-inference": { limit: { context: 8192, output: 1024 } } },
+            },
+          },
+        }),
+      );
+    }
+
+    await seedNativeModelConfig(customerA.id);
+    await seedNativeModelConfig(customerB.id);
+
+    const runtimes = new RuntimeManager(
+      new ContainerRuntimeAdapter({
+        image: process.env.ZCODE_ENTERPRISE_RUNTIME_IMAGE ?? "zcode-enterprise-runtime:local",
+        dataRoot: runtimeDataRoot,
+      }),
+    );
+    const gatewayPort = await availablePort();
+    const gateway = createEnterpriseGateway({
+      store,
+      auth: new EnterpriseAuth(store),
+      runtimes,
+      staticRoot: root,
+      host: "0.0.0.0",
+      port: gatewayPort,
+      relayOrigin: `http://host.docker.internal:${gatewayPort}`,
+    });
+    await gateway.listen();
+    const port = (gateway.server.address() as AddressInfo).port;
+    const base = `http://127.0.0.1:${port}`;
+
+    async function login(): Promise<{ cookie: string; csrf: string }> {
+      const response = await fetch(`${base}/api/enterprise/login`, {
+        method: "POST",
+        headers: { origin: base, "content-type": "application/json" },
+        body: JSON.stringify({ email: "customer@example.test", password }),
+      });
+      assert.equal(response.status, 200);
+      const cookie = response.headers
+        .getSetCookie()
+        .map((line) => line.split(";")[0])
+        .join("; ");
+      const bootstrap = await fetch(`${base}/api/enterprise/bootstrap`, { headers: { cookie } });
+      assert.equal(bootstrap.status, 200);
+      const body = (await bootstrap.json()) as { csrfToken: string };
+      return { cookie, csrf: body.csrfToken };
+    }
+
+    async function activateCustomer(
+      customerId: string,
+      session: { cookie: string; csrf: string },
+    ): Promise<Response> {
+      return fetch(`${base}/api/enterprise/customers/${customerId}/activate`, {
+        method: "POST",
+        headers: { cookie: session.cookie, origin: base, "x-csrf-token": session.csrf },
+      });
+    }
+
+    async function inspectRuntimeMount(runtimeId: string): Promise<string> {
+      const { stdout } = await execFile("docker", [
+        "inspect",
+        "--format",
+        "{{json .Mounts}}",
+        `zcode-enterprise-${runtimeId}`,
+      ]);
+      return stdout;
+    }
+
+    try {
+      const session = await login();
+      assert.equal((await activateCustomer(customerA.id, session)).status, 200);
+      const firstSessionId = await smokeNativeSession(
+        base,
+        session.cookie,
+        customerA.workspacePath,
+      );
+      const customerTargetA = store.getCustomerRuntimeTarget(initial.user.id, customerA.id);
+      const firstBinding = runtimes.getBinding(customerTargetA);
+      assert.ok(firstBinding);
+      assert.equal(firstBinding.runtimeId, customerA.id);
+      assert.equal(firstBinding.workspacePath, customerA.workspacePath);
+
+      const secondSessionId = await smokeNativeSession(
+        base,
+        session.cookie,
+        customerA.workspacePath,
+      );
+      assert.notEqual(secondSessionId, firstSessionId);
+      const secondBinding = runtimes.getBinding(customerTargetA);
+      assert.ok(secondBinding);
+      assert.equal(secondBinding.runtimeId, firstBinding.runtimeId);
+      assert.equal(secondBinding.url, firstBinding.url);
+      assert.equal(secondBinding.token, firstBinding.token);
+
+      const customerAInfo = await fetch(`${base}/api/server-info`, {
+        headers: { cookie: session.cookie },
+      });
+      assert.equal(customerAInfo.status, 200);
+      const customerAInfoBody = await customerAInfo.text();
+      assert.ok(customerAInfoBody.includes(customerA.workspacePath));
+      assert.ok(!customerAInfoBody.includes(customerB.workspacePath));
+
+      assert.equal((await activateCustomer(customerB.id, session)).status, 200);
+      const customerBSessionId = await smokeNativeSession(
+        base,
+        session.cookie,
+        customerB.workspacePath,
+      );
+      assert.notEqual(customerBSessionId, firstSessionId);
+      const customerTargetB = store.getCustomerRuntimeTarget(initial.user.id, customerB.id);
+      const customerBBinding = runtimes.getBinding(customerTargetB);
+      assert.ok(customerBBinding);
+      assert.equal(customerBBinding.runtimeId, customerB.id);
+      assert.notEqual(customerBBinding.runtimeId, firstBinding.runtimeId);
+      assert.notEqual(customerBBinding.workspacePath, firstBinding.workspacePath);
+      assert.notEqual(customerBBinding.token, firstBinding.token);
+
+      const customerBInfo = await fetch(`${base}/api/server-info`, {
+        headers: { cookie: session.cookie },
+      });
+      assert.equal(customerBInfo.status, 200);
+      const customerBInfoBody = await customerBInfo.text();
+      assert.ok(customerBInfoBody.includes(customerB.workspacePath));
+      assert.ok(!customerBInfoBody.includes(customerA.workspacePath));
+      const customerAMounts = await inspectRuntimeMount(customerA.id);
+      const customerBMounts = await inspectRuntimeMount(customerB.id);
+      assert.ok(customerAMounts.includes(customerA.workspacePath));
+      assert.ok(!customerAMounts.includes(customerB.workspacePath));
+      assert.ok(customerBMounts.includes(customerB.workspacePath));
+      assert.ok(!customerBMounts.includes(customerA.workspacePath));
+      await assert.rejects(
+        execFile("docker", [
+          "exec",
+          `zcode-enterprise-${customerB.id}`,
+          "test",
+          "-e",
+          customerA.workspacePath,
+        ]),
+      );
+
+    } finally {
+      await gateway.close();
+      store.close();
       await rm(root, { recursive: true, force: true });
     }
   },

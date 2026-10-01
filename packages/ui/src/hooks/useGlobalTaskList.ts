@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   WindowHostControllerTaskListItem,
+  ZCodeTaskListItem,
   ZCodeTaskListKind,
   ZCodeTaskListWorkspaceScope,
 } from "@zcode/services";
@@ -17,6 +18,15 @@ type GlobalTaskListItem = WindowHostControllerTaskListItem;
 
 const subscribeToNothing = () => () => {};
 const zeroRevision = () => 0;
+
+function addTaskListPresentation(item: ZCodeTaskListItem): GlobalTaskListItem {
+  return {
+    ...item,
+    sourceAvailability: "online",
+    liveStatus:
+      item.status === "completed" ? "completed" : item.status === "error" ? "error" : "idle",
+  };
+}
 
 function buildWorkspaceScopes(workspaceTabs: WorkspaceTabState[]): ZCodeTaskListWorkspaceScope[] {
   const scopes = new Map<string, ZCodeTaskListWorkspaceScope>();
@@ -40,12 +50,22 @@ export function useGlobalTaskList(params: {
   searchQuery: string;
   expanded: boolean;
   collapsedLimit: number;
+  /**
+   * Enterprise Web 当前 runtime 只有 workspace task service，没有 Desktop 的窗口级
+   * Controller。企业调用方明确选择 workspace source 后，直接查询当前 workspace service；
+   * 普通模式继续使用现有 Controller 聚合源。
+   */
+  useWorkspaceTaskService?: boolean;
 }) {
   const baseServices = useBaseWorkspaceServices();
   const controller = baseServices.windowControllerService;
+  const useWorkspaceTaskService = params.useWorkspaceTaskService === true;
   const controllerRegistry = useMemo(
-    () => (controller ? getWindowControllerTaskListRegistry(controller) : null),
-    [controller],
+    () =>
+      useWorkspaceTaskService || !controller
+        ? null
+        : getWindowControllerTaskListRegistry(controller),
+    [controller, useWorkspaceTaskService],
   );
   const controllerRevision = useSyncExternalStore(
     controllerRegistry?.subscribe ?? subscribeToNothing,
@@ -140,7 +160,7 @@ export function useGlobalTaskList(params: {
         setLoading(false);
         return;
       }
-      if (!controllerRegistry) {
+      if (!controllerRegistry && !useWorkspaceTaskService) {
         // 原子切换后 base attachment 必须提供 Controller；缺失代表 Host/Renderer 版本不一致。
         logger.error("[useGlobalTaskList] window Host Controller channel unavailable");
         setLoading(false);
@@ -148,7 +168,16 @@ export function useGlobalTaskList(params: {
       }
       setLoading(true);
       try {
-        const result = await controllerRegistry.list(queryKey, version, query);
+        const result = await (controllerRegistry
+          ? controllerRegistry.list(queryKey, version, query)
+          : (() => {
+              // Enterprise Web 没有窗口 Controller，workspace task service 仍提供同一份
+              // tasks-index 查询；只发一次 RPC，避免归档页刷新时产生重复读取。
+              return baseServices.zcodeTaskService.listTaskList(query).then((serviceResult) => ({
+                ...serviceResult,
+                items: serviceResult.items.map(addTaskListPresentation),
+              }));
+            })());
         if (requestSerialRef.current !== requestSerial) {
           return;
         }
@@ -168,8 +197,11 @@ export function useGlobalTaskList(params: {
         setHasMore(result.hasMore);
       } catch (error) {
         if (requestSerialRef.current === requestSerial) {
-          // Controller 查询失败时保留最后可信列表，避免单 source 异常清空其他 workspace。
-          logger.error(`[useGlobalTaskList] Controller 加载 ${params.kind} 列表失败`, error);
+          // Controller/Workspace service 查询失败时保留最后可信列表，避免单 source 异常清空其他 workspace。
+          logger.error(
+            `[useGlobalTaskList] ${useWorkspaceTaskService ? "workspace service" : "Controller"} 加载 ${params.kind} 列表失败`,
+            error,
+          );
         }
       } finally {
         if (requestSerialRef.current === requestSerial) {
@@ -177,7 +209,15 @@ export function useGlobalTaskList(params: {
         }
       }
     },
-    [controllerRegistry, params.kind, query, queryKey, workspaceScopes],
+    [
+      baseServices.zcodeTaskService,
+      controllerRegistry,
+      params.kind,
+      query,
+      queryKey,
+      useWorkspaceTaskService,
+      workspaceScopes,
+    ],
   );
 
   const refresh = useCallback(async () => {

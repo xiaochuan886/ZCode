@@ -43,6 +43,7 @@ import type {
 } from "@/store/zcodeSessionStoreTypes.js";
 import type { TaskFindDialogProps } from "@/quickpick/TaskFindDialog.js";
 import type { AutomationsNavigationTab, OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 
 export interface WorkspaceShellZCodeState {
   activeTaskId: WorkspaceZCodeUIState["activeTaskId"];
@@ -86,6 +87,8 @@ export interface AppProps {
   onLogout?: () => void;
   onLogin?: () => void;
   user?: UserInfo | null;
+  enterpriseContext?: EnterpriseRootContext;
+  enterpriseManagedModel?: boolean;
   reconnectingRemoteWorkspaceKeys: string[];
   remoteWorkspaceErrorByWorkspaceKey: Record<string, string>;
   reconnectingRemoteWorkspaceLogsByWorkspaceKey?: Record<string, RemoteConnectionLogEntry[]>;

@@ -2,9 +2,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Duplex } from "node:stream";
 import { readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve, sep } from "node:path";
-import type { EnterpriseStore } from "./store.js";
 import { EnterpriseAuth } from "./auth.js";
-import { EnterpriseError, type EnterpriseCase, type EnterpriseSession } from "./types.js";
+import { EnterpriseError, type EnterpriseRuntimeTarget, type EnterpriseSession } from "./types.js";
 import { nativePathAllowed, proxyHttp } from "./proxy.js";
 import { handleEnterpriseApiRequest } from "./enterprise-api.js";
 import type { GatewayOptions } from "./gateway-types.js";
@@ -15,9 +14,11 @@ import {
   type RelayCredential,
 } from "./mcp-relay.js";
 import { cookies } from "./gateway-cookies.js";
-import { prepare } from "./gateway-prepare.js";
-import { type EnterpriseModelProvider, type ModelRelayCapability } from "./model-provision.js";
-import { handleModelRelayRequest, ModelRelayConcurrencyLimiter } from "./model-relay.js";
+import { prepareCustomer } from "./gateway-prepare.js";
+import {
+  publicCustomer,
+  runtimeTargetsForTenant,
+} from "./gateway-runtime.js";
 
 const mime: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -79,41 +80,11 @@ function sessionFor(request: IncomingMessage, auth: EnterpriseAuth): EnterpriseS
   return token ? auth.resolveSession(token) : null;
 }
 
-function publicCase(value: EnterpriseCase) {
-  return {
-    id: value.id,
-    title: value.title,
-    category: value.category,
-    status: value.status,
-    serviceSpaceId: value.serviceSpaceId,
-    workspacePath: value.workspacePath,
-    sessionId: value.nativeSessionId ?? undefined,
-    serviceObject: {
-      id: value.serviceObjectId,
-      name: value.objectSnapshot.name,
-      type: value.objectSnapshot.type,
-    },
-  };
-}
-
-function runtimeCasesInSpaces(
-  store: EnterpriseStore,
-  actorId: string,
-  serviceSpaceIds: string[],
-): EnterpriseCase[] {
-  return serviceSpaceIds.flatMap((serviceSpaceId) => store.listCases(actorId, serviceSpaceId));
-}
-
 export function createEnterpriseGateway(options: GatewayOptions) {
   const sockets = new Map<string, Set<Duplex>>();
   const socketUsers = new Map<string, string>();
   const relayCredentials = new Map<string, Map<string, RelayCredential>>();
-  const modelRelayCapabilities = new Map<
-    string,
-    Map<EnterpriseModelProvider, ModelRelayCapability>
-  >();
   const relayLimiter = new McpRelayConcurrencyLimiter();
-  const modelRelayLimiter = new ModelRelayConcurrencyLimiter();
   const closeSockets = (sessionId: string) => {
     for (const socket of sockets.get(sessionId) ?? []) socket.destroy();
     sockets.delete(sessionId);
@@ -124,35 +95,34 @@ export function createEnterpriseGateway(options: GatewayOptions) {
       if (socketUserId === userId) closeSockets(sessionId);
     }
   };
-  const stopRuntime = (value: EnterpriseCase) =>
+  const stopRuntime = (value: EnterpriseRuntimeTarget) =>
     options.runtimes.stop(value, () => {
-      relayCredentials.delete(value.id);
-      modelRelayCapabilities.delete(value.id);
+      relayCredentials.delete(value.runtimeId);
     });
-  const ensureRuntime = async (value: EnterpriseCase, userId: string, requestOrigin: string) => {
+  const ensureRuntime = async (
+    value: EnterpriseRuntimeTarget,
+    userId: string,
+    requestOrigin: string,
+  ) => {
     try {
       return await options.runtimes.ensure(value, {
         beforeStop: () => {
-          relayCredentials.delete(value.id);
-          modelRelayCapabilities.delete(value.id);
+          relayCredentials.delete(value.runtimeId);
         },
         beforeStart: async () => {
-          relayCredentials.delete(value.id);
-          modelRelayCapabilities.delete(value.id);
-          await prepare(
-            value,
+          relayCredentials.delete(value.runtimeId);
+          await prepareCustomer(
+            options.store.getCustomer(userId, value.id),
             options.store,
             userId,
             requestOrigin,
             relayCredentials,
             options.modelRuntimeDataRoot,
-            modelRelayCapabilities,
           );
         },
       });
     } catch (error) {
-      relayCredentials.delete(value.id);
-      modelRelayCapabilities.delete(value.id);
+      relayCredentials.delete(value.runtimeId);
       throw error;
     }
   };
@@ -186,7 +156,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
             enabled: true,
             user: null,
             tenants: [],
-            activeCase: null,
+            activeCustomer: null,
             csrfToken: "",
           });
           return;
@@ -196,44 +166,16 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           ...tenant,
           role: options.store.getMembership(session.userId, tenant.id).role,
         }));
-        const activeCase = options.store.getActiveCase(session.id);
+        const activeCustomer = options.store.getActiveCustomer(session.id);
         send(response, 200, {
           enabled: true,
           user: user ? { id: user.id, email: user.email, displayName: user.displayName } : null,
           tenants,
-          activeCase: activeCase ? publicCase(activeCase) : null,
+          activeCustomer: activeCustomer ? publicCustomer(activeCustomer) : null,
           csrfToken: cookies(request).get("enterprise_csrf") ?? null,
         });
         return;
       }
-      if (
-        await handleModelRelayRequest(
-          path,
-          request,
-          response,
-          modelRelayCapabilities,
-          ({ caseId, actorId }) => {
-            try {
-              const value = options.store.getCase(actorId, caseId);
-              return value.status !== "closed";
-            } catch {
-              return false;
-            }
-          },
-          ({ caseId, actorId, providerFamily }) => {
-            try {
-              const value = options.store.getCase(actorId, caseId);
-              return options.store.getModelCredentialForGateway(value.tenantId, providerFamily)
-                .apiKey;
-            } catch {
-              return null;
-            }
-          },
-          options.fetchImpl ?? fetch,
-          modelRelayLimiter,
-        )
-      )
-        return;
       if (
         await handleMcpRelayRequest(
           path,
@@ -266,8 +208,8 @@ export function createEnterpriseGateway(options: GatewayOptions) {
             str,
             origin,
             relayOrigin,
-            publicCase,
-            runtimeCasesInSpaces,
+            publicCustomer,
+            runtimeTargetsForTenant,
           },
         });
         return;
@@ -282,9 +224,9 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           send(response, 401, { error: "Unauthorized" });
           return;
         }
-        const value = options.store.getActiveCase(session.id);
-        if (!value || value.status === "closed") {
-          send(response, 403, { error: "Active Case required" });
+        const value = options.store.getActiveRuntimeTarget(session.id);
+        if (!value) {
+          send(response, 403, { error: "Active customer required" });
           return;
         }
         if (method !== "GET" && method !== "HEAD") {
@@ -301,9 +243,9 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           send(response, 401, { error: "Unauthorized" });
           return;
         }
-        const activeCase = options.store.getActiveCase(session.id);
-        if (activeCase?.id !== value.id || activeCase.status === "closed") {
-          send(response, 403, { error: "Active Case changed" });
+        const activeTarget = options.store.getActiveRuntimeTarget(session.id);
+        if (activeTarget?.runtimeId !== value.runtimeId) {
+          send(response, 403, { error: "Active customer changed" });
           return;
         }
         await proxyHttp(request, response, binding);
@@ -365,7 +307,6 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     close: async () => {
       for (const id of sockets.keys()) closeSockets(id);
       relayCredentials.clear();
-      modelRelayCapabilities.clear();
       try {
         await options.runtimes.stopAll();
       } finally {

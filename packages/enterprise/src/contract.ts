@@ -1,11 +1,18 @@
-import type { EnterpriseCase, EnterpriseSession, McpBinding, SharedSkill } from "./types.js";
+import type {
+  Customer,
+  EnterpriseRuntimeTarget,
+  EnterpriseSession,
+  McpBinding,
+  SharedSkill,
+} from "./types.js";
 
-/** Case preparation and gateway consume these scoped reads. */
-export interface EnterpriseCaseReader {
-  getCase(actorId: string, caseId: string): EnterpriseCase;
-  getActiveCase(sessionId: string): EnterpriseCase | null;
-  listSkillsForCase(actorId: string, caseId: string): SharedSkill[];
-  listMcpBindingsForCase(actorId: string, caseId: string): McpBinding[];
+/** Customer preparation and gateway consume these scoped reads. */
+export interface EnterpriseCustomerReader {
+  getCustomer(actorId: string, customerId: string): Customer;
+  getActiveCustomer(sessionId: string): Customer | null;
+  getActiveRuntimeTarget(sessionId: string): EnterpriseRuntimeTarget | null;
+  listSkillsForCustomer(actorId: string, customerId: string): SharedSkill[];
+  listMcpBindingsForCustomer(actorId: string, customerId: string): McpBinding[];
 }
 export interface EnterpriseSessionReader {
   resolveSession(tokenHash: string): EnterpriseSession | null;
