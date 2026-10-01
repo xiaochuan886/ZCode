@@ -143,6 +143,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
               target: value,
               store: options.store,
               runtimeDataRoot: options.modelRuntimeDataRoot,
+              pluginSeedRoot: options.pluginSeedRoot,
               // 中继地址优先用 operator 配置;否则取触发请求的 origin(两个调用方都有请求)。
               relayOrigin: validatedOrigin(
                 options.relayOrigin ?? options.expectedOrigin ?? requestOrigin ?? fallbackOrigin(),

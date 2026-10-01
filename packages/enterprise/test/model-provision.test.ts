@@ -302,6 +302,108 @@ test("tenant connectors are distributed into the expert HOME config with the man
   }
 });
 
+test("runtime preparation seeds baseline plugins from the configured seed root", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-plugin-prepare-"));
+  const runtimeDataRoot = join(dir, "runtimes");
+  const seedRoot = join(dir, "plugin-seed");
+  const store = await EnterpriseStore.open(join(dir, "enterprise.db"), join(dir, "workspaces"));
+  try {
+    const admin = store.bootstrapAdmin("Plugins", "plugin-admin@example.test", "hash");
+    const tenantId = admin.tenant.id;
+    const member = store.provisionUser(admin.user.id, tenantId, {
+      email: "plugin-member@example.test",
+      passwordHash: "hash",
+      role: "member",
+    });
+    const target = (userId: string) => ({
+      id: `e-${userId}-${tenantId}`,
+      tenantId,
+      userId,
+      workspacePath: "",
+      runtimeId: `e-${userId}-${tenantId}`,
+      kind: "expert" as const,
+    });
+    await mkdir(join(seedRoot, "superpowers", "0.5.1"), { recursive: true });
+    await writeFile(join(seedRoot, "superpowers", "0.5.1", "plugin.json"), "{}\n");
+    await prepareExpertRuntime({
+      target: target(admin.user.id),
+      store,
+      runtimeDataRoot,
+      relayOrigin: "https://gateway.example.test",
+      pluginSeedRoot: seedRoot,
+    });
+    const home = join(runtimeDataRoot, target(admin.user.id).runtimeId);
+    assert.equal(
+      await readFile(
+        join(
+          home,
+          ".zcode",
+          "cli",
+          "plugins",
+          "cache",
+          "zcode-plugins-official",
+          "superpowers",
+          "0.5.1",
+          "plugin.json",
+        ),
+        "utf8",
+      ),
+      "{}\n",
+    );
+    const config = JSON.parse(
+      await readFile(join(home, ".zcode", "cli", "config.json"), "utf8"),
+    ) as {
+      plugins: { enabledPlugins: Record<string, boolean> };
+    };
+    assert.equal(config.plugins.enabledPlugins["superpowers@zcode-plugins-official"], true);
+    // 安装注册表(installed_plugins.json)是发现链路的另一道门槛:记录指向
+    // 种子缓存目录(installPath 为空时的解析回退),插件 skills 才会加载。
+    const registry = JSON.parse(
+      await readFile(join(home, ".zcode", "cli", "plugins", "installed_plugins.json"), "utf8"),
+    ) as {
+      version: number;
+      plugins: Array<{ id: string; version: string; installPath: string; scope: string }>;
+    };
+    assert.equal(registry.version, 1);
+    assert.deepEqual(
+      registry.plugins.map(({ id, version, installPath, scope }) => ({
+        id,
+        version,
+        installPath,
+        scope,
+      })),
+      [
+        {
+          id: "superpowers@zcode-plugins-official",
+          version: "0.5.1",
+          installPath: "",
+          scope: "user",
+        },
+      ],
+    );
+
+    // 未配置种子根:prepare 不产生任何插件缓存,也不写 CLI config 或安装注册表。
+    await prepareExpertRuntime({
+      target: target(member.user.id),
+      store,
+      runtimeDataRoot,
+      relayOrigin: "https://gateway.example.test",
+    });
+    const memberHome = join(runtimeDataRoot, target(member.user.id).runtimeId);
+    await assert.rejects(
+      readFile(join(memberHome, ".zcode", "cli", "config.json")),
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
+    await assert.rejects(
+      readFile(join(memberHome, ".zcode", "cli", "plugins", "installed_plugins.json")),
+      (error: NodeJS.ErrnoException) => error.code === "ENOENT",
+    );
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("user-oauth connectors distribute only into the authorized expert HOME", async () => {
   const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-user-oauth-prepare-"));
   const runtimeDataRoot = join(dir, "runtimes");
@@ -368,8 +470,10 @@ test("user-oauth connectors distribute only into the authorized expert HOME", as
         userId: admin.user.id,
         accessToken: "admin-access-token",
       });
-      const adminRelayToken = store.userConnectorAuthorization(connector.id, admin.user.id)!
-        .relayToken;
+      const adminRelayToken = store.userConnectorAuthorization(
+        connector.id,
+        admin.user.id,
+      )!.relayToken;
       await prepareExpertRuntime({
         target: target(admin.user.id),
         store,

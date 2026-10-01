@@ -28,7 +28,8 @@ interface ManagedNames {
 const emptyManaged = (): ManagedNames => ({ skills: [], mcp: [] });
 const pending = new Map<string, Promise<unknown>>();
 
-async function writeAtomic(path: string, content: string, mode = 0o600): Promise<void> {
+/** Atomic file write (staging + rename); shared with the plugin seed config merge. */
+export async function writeAtomic(path: string, content: string, mode = 0o600): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, content, { mode, flag: "wx" });

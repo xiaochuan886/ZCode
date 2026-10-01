@@ -23,6 +23,8 @@ export type GatewayOptions = {
   runtimeReapIntervalMs?: number;
   /** 并发存活 runtime 上限;未设置或 0 = 不限。超限时先驱逐最久未活跃的 runtime。 */
   maxRuntimes?: number;
+  /** 基线插件种子根目录(ZCODE_ENTERPRISE_PLUGIN_SEED_ROOT);未设置 = 不种子插件。 */
+  pluginSeedRoot?: string;
 };
 
 export type EnterpriseApiHelpers = {

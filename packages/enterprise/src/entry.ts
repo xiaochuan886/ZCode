@@ -12,6 +12,8 @@ const workspaceRoot = resolve(
 );
 const dbPath = resolve(process.env["ZCODE_ENTERPRISE_DB_PATH"] ?? `${dataRoot}/enterprise.sqlite`);
 const staticRoot = resolve(process.env["ZCODE_ENTERPRISE_STATIC_ROOT"] ?? "./packages/web/dist");
+// 基线插件种子根:operator 维护的宿主目录(`<name>/<version>/` 布局);相对路径按 cwd 解析。
+const pluginSeedRoot = process.env["ZCODE_ENTERPRISE_PLUGIN_SEED_ROOT"];
 const mode = process.env["ZCODE_ENTERPRISE_RUNTIME_MODE"] ?? "container";
 const host = process.env["ZCODE_ENTERPRISE_HOST"] ?? "127.0.0.1";
 const expectedOrigin = process.env["ZCODE_ENTERPRISE_ORIGIN"];
@@ -92,6 +94,7 @@ async function main() {
     ...(configuredRelayOrigin ? { relayOrigin: configuredRelayOrigin } : {}),
     ...(idleRuntimeMinutes > 0 ? { runtimeIdleMs: idleRuntimeMinutes * 60_000 } : {}),
     ...(maxRuntimes > 0 ? { maxRuntimes } : {}),
+    ...(pluginSeedRoot ? { pluginSeedRoot: resolve(pluginSeedRoot) } : {}),
     modelRuntimeDataRoot: `${dataRoot}/runtimes`,
   });
   await gateway.listen();

@@ -3,6 +3,7 @@ import type { EnterpriseRuntimeTarget, Customer, TenantMcpConnectorDistribution 
 import { prepareCustomerWorkspace } from "./materialize.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
 import { provisionExpertModelProviders } from "./model-provision.js";
+import { seedBaselinePlugins } from "./plugin-seed.js";
 import { seedBaselineSkills } from "./skill-seed.js";
 
 /**
@@ -15,8 +16,9 @@ export async function prepareExpertRuntime(params: {
   store: EnterpriseStore;
   runtimeDataRoot: string | undefined;
   relayOrigin: string;
+  pluginSeedRoot?: string;
 }): Promise<void> {
-  const { target, store, runtimeDataRoot, relayOrigin } = params;
+  const { target, store, runtimeDataRoot, relayOrigin, pluginSeedRoot } = params;
   if (!runtimeDataRoot) return;
   const tenantSkills = store.tenantSkillsForDistribution(target.tenantId);
   const mcpServers = tenantConnectorServers(store, target.tenantId, target.userId, relayOrigin);
@@ -35,6 +37,9 @@ export async function prepareExpertRuntime(params: {
   // 基线 Skill(如官方 skill-creator)种子到 HOME `.agents/skills/`:容器里没有
   // 插件商店,不种子则专家完全无法使用这些官方 Skill 创建工具。
   await seedBaselineSkills(`${runtimeDataRoot}/${target.runtimeId}`);
+  // 基线插件(如 superpowers、zcode-guide)种子到 HOME 插件缓存并在 CLI config
+  // 中启用:容器离线,不种子则这些命令/插件 MCP 能力完全缺席。
+  await seedBaselinePlugins(`${runtimeDataRoot}/${target.runtimeId}`, pluginSeedRoot);
   await provisionExpertModelProviders({
     runtimeOwner: target.runtimeId,
     tenantId: target.tenantId,
