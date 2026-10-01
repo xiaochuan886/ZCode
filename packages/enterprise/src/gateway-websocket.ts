@@ -6,7 +6,7 @@ import type { RuntimeBinding } from "./runtime.js";
 import type { EnterpriseApiHelpers, GatewayOptions } from "./gateway-types.js";
 import { nativePathAllowed, proxyWebSocket, validWebSocketHandshake } from "./proxy.js";
 
-type SocketHelpers = Pick<EnterpriseApiHelpers, "cookies" | "origin" | "relayOrigin"> & {
+type SocketHelpers = Pick<EnterpriseApiHelpers, "cookies" | "origin"> & {
   sessionFor(request: IncomingMessage, auth: EnterpriseAuth): EnterpriseSession | null;
 };
 
@@ -17,13 +17,13 @@ export function attachEnterpriseWebSocketHandler(input: {
   socketUsers: Map<string, string>;
   ensureRuntime(
     value: EnterpriseRuntimeTarget,
-    userId: string,
-    requestOrigin: string,
+    userId?: string,
+    requestOrigin?: string,
   ): Promise<RuntimeBinding>;
   helpers: SocketHelpers;
 }): void {
   const { server, options, sockets, socketUsers, ensureRuntime, helpers } = input;
-  const { cookies, origin, relayOrigin, sessionFor } = helpers;
+  const { cookies, origin, sessionFor } = helpers;
 
   server.on("upgrade", async (request, socket, head) => {
     const fail = (status: number) =>
@@ -52,7 +52,11 @@ export function attachEnterpriseWebSocketHandler(input: {
         fail(403);
         return;
       }
-      const binding = await ensureRuntime(value, session.userId, relayOrigin(request, options));
+      const binding = await ensureRuntime(
+        value,
+        session.userId,
+        origin(request, options.expectedOrigin),
+      );
       const token = cookies(request).get("enterprise_session") ?? "";
       const current = options.auth.resolveSession(token);
       if (!current) {

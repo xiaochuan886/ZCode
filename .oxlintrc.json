@@ -59,6 +59,7 @@
     "packages/ui/src/components/ui",
     "packages/ui/src/components/ai-elements",
     ".agents/skills",
+    "packages/enterprise/runtime-seed",
     "packages/formal-proof",
     "apps/zcode-cli",
     "docs/electron"

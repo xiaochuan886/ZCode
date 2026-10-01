@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { EnterpriseError, type Membership, type Role, type Tenant, type User } from "./types.js";
-import { migrateStoreSchema } from "./store-schema.js";
+import { migrateStoreSchema, type StoreSchemaHooks } from "./store-schema.js";
 
 export type Row = Record<string, unknown>;
 export const now = () => new Date().toISOString();
@@ -40,8 +40,8 @@ export class EnterpriseStoreBase {
       throw error;
     }
   }
-  protected migrate(): void {
-    migrateStoreSchema(this.db);
+  protected migrate(hooks: StoreSchemaHooks = {}): void {
+    migrateStoreSchema(this.db, hooks);
   }
   protected membership(userId: string, tenantId: string, role?: Role): Membership {
     const row = this.one(

@@ -167,6 +167,21 @@ function resolveServerWorkspaces(options: HttpServerOptions): ServerRemoteWorksp
   if (options.workspaces) {
     return options.workspaces;
   }
+  // 企业专家 runtime 会在一个进程里托管同租户的全部客户工作区；
+  // ZCODE_SERVER_WORKSPACES 用冒号或换行分隔多个绝对路径（原生单工作区行为不变）。
+  const multiple = readTrimmedEnv("ZCODE_SERVER_WORKSPACES");
+  if (multiple) {
+    const paths = multiple
+      .split(/[:\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (paths.length > 0) {
+      return paths.map((workspacePath) => ({
+        path: workspacePath,
+        label: basename(workspacePath) || workspacePath,
+      }));
+    }
+  }
   const workspacePath = readTrimmedEnv("ZCODE_SERVER_WORKSPACE") || process.cwd();
   return [
     {

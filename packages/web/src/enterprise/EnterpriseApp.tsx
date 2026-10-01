@@ -1,18 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { connectViaWebSocket } from "@zcode/client";
 import type { IPlatformService } from "@zcode/shared";
 import { zh, en } from "./presentation.js";
-import { EnterpriseCaseHome } from "./EnterpriseCaseHome.js";
-import { EnterpriseCaseWorkspace } from "./EnterpriseCaseWorkspace.js";
-import { EnterpriseAppLayout } from "./EnterpriseAppLayout.js";
-import { EnterpriseModelSettings } from "./EnterpriseModelSettings.js";
-import type {
-  ActiveCustomer,
-  Customer,
-  CustomerDraft,
-  EnterpriseBootstrap,
-} from "./api.js";
+import { EnterpriseLogin } from "./EnterpriseLogin.js";
+import { EnterpriseNativeRoot } from "./EnterpriseNativeRoot.js";
+import { EnterpriseSettings } from "./EnterpriseSettings.js";
+import type { EnterpriseBootstrap } from "./api.js";
 import type { EnterpriseRootContext, NativeServices } from "./EnterpriseNativeRoot.js";
 import { useEnterpriseAction } from "./useEnterpriseAction.js";
 import { useEnterpriseCustomerCatalog } from "./useEnterpriseCustomerCatalog.js";
@@ -22,7 +16,8 @@ import { createEnterpriseClient } from "./api.js";
 const api = createEnterpriseClient();
 
 interface NativeBinding {
-  customerId: string;
+  /** 专家 runtime 会话标识:用户×租户。客户切换不重建连接。 */
+  key: string;
   services: NativeServices;
 }
 
@@ -36,10 +31,9 @@ export function EnterpriseApp({
   const t = /^zh\b/i.test(navigator.language) ? zh : en;
   const [bootstrap, setBootstrap] = useState(initial);
   const [tenantId, setTenantId] = useState(initial.tenants[0]?.id ?? "");
-  const [workspaceOpen, setWorkspaceOpen] = useState(Boolean(initial.activeCustomer));
-  const [customerDialogOpen, setCustomerDialogOpen] = useState(false);
-  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [native, setNative] = useState<NativeBinding | null>(null);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const socketRef = useRef<WebSocket | null>(null);
   const connectionGeneration = useRef(0);
   const { error, setError, busy, run } = useEnterpriseAction();
@@ -48,11 +42,6 @@ export function EnterpriseApp({
     modelStatusLoaded,
     refresh: refreshModelStatus,
   } = useTenantModelStatus(bootstrap.user?.id, tenantId, setError);
-  const [customerDraft, setCustomerDraft] = useState<CustomerDraft>({
-    tenantId,
-    name: "",
-    type: "",
-  });
   const [customers, setCustomers] = useEnterpriseCustomerCatalog({
     user: bootstrap.user,
     tenantId,
@@ -63,9 +52,8 @@ export function EnterpriseApp({
   });
 
   const selectedTenant = bootstrap.tenants.find((tenant) => tenant.id === tenantId);
-  const tenantName = selectedTenant?.name ?? t.select;
   const activeCustomer = bootstrap.activeCustomer;
-  const workspaceTarget = activeCustomer;
+  const runtimeKey = bootstrap.user ? `${bootstrap.user.id}:${tenantId}` : null;
 
   async function refresh() {
     const next = await api.bootstrap();
@@ -74,21 +62,16 @@ export function EnterpriseApp({
     return next;
   }
 
-  /**
-   * Invalidate the current generation before changing active customer. The Root
-   * must be removed in the same event before the gateway mutation starts.
-   */
   function disconnect() {
     connectionGeneration.current += 1;
     flushSync(() => {
       setNative(null);
-      setWorkspaceOpen(false);
     });
     socketRef.current?.close();
     socketRef.current = null;
   }
 
-  async function connect(target: ActiveCustomer) {
+  async function connect() {
     const generation = connectionGeneration.current;
     const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
     const opened: { current: WebSocket | null } = { current: null };
@@ -96,212 +79,251 @@ export function EnterpriseApp({
       onOpenSocket: (ws) => {
         opened.current = ws;
       },
+      onClose: () => {
+        // 只处理非主动断开(租户切换/登出会先推进 generation)。网关在停专家 runtime
+        // 时会销毁本会话 socket:这里卸载 Root 并触发重连,重连会重新 prepare 并拉起
+        // 新 runtime;半开 socket 上的任何 RPC 都不会返回,必须自愈而不是等待。
+        if (generation !== connectionGeneration.current) return;
+        connectionGeneration.current += 1;
+        socketRef.current = null;
+        flushSync(() => {
+          setNative(null);
+        });
+        setReconnectNonce((nonce) => nonce + 1);
+      },
     });
     if (generation !== connectionGeneration.current) {
       opened.current?.close();
       return;
     }
     socketRef.current = opened.current;
-    setNative({ customerId: target.id, services });
+    setNative((current) => (current ? current : { key: runtimeKey ?? "", services }));
   }
 
+  // 登录前 initial.tenants 为空,tenantId 以空串起步;登录成功后必须从新 bootstrap
+  // 解析出租户,否则客户目录 hook 拿空租户查询,首登会停在"暂无客户"死锁。
   useEffect(() => {
-    const target = workspaceOpen ? workspaceTarget : null;
-    if (
-      !target ||
-      modelSettingsOpen ||
-      !modelReady ||
-      !bootstrap.user ||
-      native?.customerId === target.id
-    ) {
+    if (!bootstrap.user) return;
+    if (bootstrap.tenants.some((tenant) => tenant.id === tenantId)) return;
+    setTenantId(bootstrap.tenants[0]?.id ?? "");
+  }, [bootstrap, tenantId]);
+
+  // 首次进入若没有活跃客户,自动激活租户下第一个客户,让 Root 有初始工作区。
+  useEffect(() => {
+    if (!bootstrap.user || !tenantId || activeCustomer) return;
+    const first = customers.find((customer) => customer.tenantId === tenantId) ?? customers[0];
+    if (!first) return;
+    let stale = false;
+    void api
+      .activateCustomer(first.id, bootstrap.csrfToken)
+      .then(refresh)
+      .then((next) => {
+        if (!stale && next.activeCustomer?.id !== first.id) {
+          throw new Error("Customer activation did not return the selected workspace");
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!stale) setError(String(cause));
+      });
+    return () => {
+      stale = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrap.user?.id, activeCustomer?.id, tenantId, customers.length]);
+
+  // 专家 runtime 连接:按 (用户, 租户) 一条连接,客户切换不触发重建;
+  // reconnectNonce 在 socket 意外断开后推进,让本 effect 重新拉起连接。
+  useEffect(() => {
+    if (!bootstrap.user || !activeCustomer || !modelReady || native || !runtimeKey) {
       return;
     }
     let stale = false;
-    void connect(target).catch((cause: unknown) => {
+    void connect().catch((cause: unknown) => {
       if (!stale) setError(String(cause));
     });
     return () => {
       stale = true;
     };
-  }, [
-    bootstrap.user?.id,
-    modelReady,
-    modelSettingsOpen,
-    native?.customerId,
-    setError,
-    workspaceOpen,
-    workspaceTarget?.id,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrap.user?.id, activeCustomer?.id, modelReady, native, runtimeKey, reconnectNonce]);
 
-  useEffect(() => () => socketRef.current?.close(), []);
+  useEffect(
+    () => () => {
+      // 卸载时先推进 generation,避免 onClose 在组件销毁后触发重连。
+      connectionGeneration.current += 1;
+      socketRef.current?.close();
+    },
+    [],
+  );
 
-  function openNewCustomer() {
-    setModelSettingsOpen(false);
-    setCustomerDraft({ tenantId, name: "", type: "" });
-    setCustomerDialogOpen(true);
-  }
-
-  function openCustomer(customer: Customer) {
-    void run(async () => {
-      setModelSettingsOpen(false);
-      setCustomerDialogOpen(false);
-      if (activeCustomer?.id === customer.id) {
-        setWorkspaceOpen(true);
-        return;
-      }
-      disconnect();
-      await api.activateCustomer(customer.id, bootstrap.csrfToken);
-      const next = await refresh();
-      if (next.activeCustomer?.id !== customer.id) {
-        throw new Error("Customer activation did not return the selected workspace");
-      }
-      setWorkspaceOpen(true);
-    });
-  }
-
-  function returnHome() {
-    disconnect();
-    setCustomerDialogOpen(false);
-    setModelSettingsOpen(false);
-  }
-
-  function openModelSettings() {
-    disconnect();
-    setCustomerDialogOpen(false);
-    setModelSettingsOpen(true);
-  }
-
-  function createCustomer(submitted: CustomerDraft) {
-    void run(async () => {
-      const created = await api.createCustomer(
-        { ...submitted, tenantId, name: submitted.name.trim() },
-        bootstrap.csrfToken,
-      );
-      disconnect();
-      await api.activateCustomer(created.id, bootstrap.csrfToken);
-      const next = await refresh();
-      if (next.activeCustomer?.id !== created.id) {
-        throw new Error("Customer activation did not return the newly created workspace");
-      }
-      setCustomers((current) => [...current.filter((item) => item.id !== created.id), created]);
-      setCustomerDialogOpen(false);
-      setWorkspaceOpen(true);
-    });
+  function activateBookkeeping(customerId: string) {
+    if (activeCustomer?.id === customerId) return;
+    void api
+      .activateCustomer(customerId, bootstrap.csrfToken)
+      .then(refresh)
+      .catch((cause: unknown) => {
+        setError(String(cause));
+      });
   }
 
   function changeTenant(nextTenantId: string) {
     if (nextTenantId === tenantId) return;
     disconnect();
-    setModelSettingsOpen(false);
     setTenantId(nextTenantId);
     setCustomers([]);
-    setCustomerDraft((current) => ({ ...current, tenantId: nextTenantId, name: "", type: "" }));
+    void refresh().catch((cause: unknown) => setError(String(cause)));
   }
 
   function logout() {
     void run(async () => {
       disconnect();
-      setModelSettingsOpen(false);
       await api.logout(bootstrap.csrfToken);
       setCustomers([]);
       await refresh();
     });
   }
 
-  const enterpriseContext: EnterpriseRootContext = {
-    user: bootstrap.user
-      ? {
-          id: bootstrap.user.id,
-          email: bootstrap.user.email,
-          displayName: bootstrap.user.displayName,
-        }
-      : null,
-    tenants: bootstrap.tenants,
-    activeTenantId: tenantId || null,
-    customers:
-      customers.length > 0
-        ? customers
-        : activeCustomer
-          ? [{ id: activeCustomer.id, name: activeCustomer.name }]
-          : [],
-    activeCustomerId: activeCustomer?.id ?? null,
-    onSelectCustomer: (customerId) => {
-      const customer = customers.find((item) => item.id === customerId);
-      if (customer) openCustomer(customer);
-    },
-    onSelectTenant: changeTenant,
-    onOpenModelSettings: openModelSettings,
-    onOpenCustomerHome: returnHome,
-    onLogout: logout,
-  };
+  const enterpriseContext: EnterpriseRootContext | undefined = useMemo(() => {
+    if (!bootstrap.user) return undefined;
+    return {
+      user: {
+        id: bootstrap.user.id,
+        email: bootstrap.user.email,
+        displayName: bootstrap.user.displayName,
+      },
+      tenants: bootstrap.tenants,
+      activeTenantId: tenantId || null,
+      customers: customers.map((customer) => ({
+        id: customer.id,
+        name: customer.name,
+        workspacePath: customer.workspacePath,
+      })),
+      activeCustomerId: activeCustomer?.id ?? null,
+      onSelectCustomer: (customerId) => {
+        activateBookkeeping(customerId);
+      },
+      onOpenCustomerWorkspace: (workspacePath: string) => {
+        const customer = customers.find(
+          (item) => item.workspacePath && item.workspacePath === workspacePath,
+        );
+        if (customer) activateBookkeeping(customer.id);
+      },
+      onSelectTenant: changeTenant,
+      onOpenCustomerHome: () => setSettingsOpen(true),
+      onLogout: logout,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrap, tenantId, customers, activeCustomer?.id]);
 
-  const workspace =
-    workspaceTarget && workspaceOpen ? (
-      <EnterpriseCaseWorkspace
-        activeCustomer={workspaceTarget}
-        modelReady={modelReady}
-        modelStatusLoaded={modelStatusLoaded}
-        t={t}
-        native={native}
-        platform={platform}
-        onError={setError}
-        onBack={returnHome}
-        onOpenModelSettings={openModelSettings}
-        enterpriseContext={enterpriseContext}
-      />
-    ) : (
-      <EnterpriseCaseHome
-        t={t}
-        tenantName={tenantName}
-        customers={customers}
-        activeCustomerId={activeCustomer?.id}
-        busy={busy}
-        onOpenCustomer={openCustomer}
-        onCreateCustomer={openNewCustomer}
-        onOpenModelSettings={openModelSettings}
-      />
+  if (!bootstrap.user) {
+    return (
+      <div className="flex h-dvh min-h-dvh flex-col bg-background text-ui-base text-foreground">
+        {error ? (
+          <div
+            role="alert"
+            className="absolute inset-x-0 top-0 z-50 flex items-center gap-3 border-b border-destructive bg-card px-3 py-2 text-ui-caption text-destructive"
+          >
+            <span className="min-w-0 flex-1">{error}</span>
+            <button
+              type="button"
+              className="rounded-lg border border-border bg-surface px-3 py-1.5"
+              onClick={() => location.reload()}
+            >
+              {t.retry}
+            </button>
+          </div>
+        ) : null}
+        <EnterpriseLogin
+          t={t}
+          busy={busy}
+          onLogin={(email, password) => {
+            void run(async () => {
+              await api.login(email, password, null);
+              await refresh();
+            });
+          }}
+        />
+      </div>
     );
-
-  const modelSettings = modelSettingsOpen ? (
-    <EnterpriseModelSettings
-      tenantId={tenantId}
-      tenantName={tenantName}
-      role={selectedTenant?.role ?? "member"}
-      csrfToken={bootstrap.csrfToken}
-      onBack={() => setModelSettingsOpen(false)}
-      onSaved={() => {
-        disconnect();
-        void refreshModelStatus();
-      }}
-    />
-  ) : null;
+  }
 
   return (
-    <EnterpriseAppLayout
-      t={t}
-      user={bootstrap.user}
-      tenants={bootstrap.tenants}
-      tenantId={tenantId}
-      busy={busy}
-      modelSettingsOpen={modelSettingsOpen}
-      workspaceOpen={workspaceOpen}
-      error={error}
-      workspace={workspace}
-      modelSettings={modelSettings}
-      customerDialogOpen={customerDialogOpen}
-      customerDraft={customerDraft}
-      setCustomerDraft={setCustomerDraft}
-      onTenantChange={changeTenant}
-      onLogout={logout}
-      onLogin={(email, password) =>
-        void run(async () => {
-          await api.login(email, password, bootstrap.csrfToken);
-          const next = await refresh();
-          setTenantId(next.tenants[0]?.id ?? "");
-        })
-      }
-      onCreateCustomer={createCustomer}
-      onCancelCustomer={() => setCustomerDialogOpen(false)}
-    />
+    <div className="flex h-dvh min-h-dvh flex-col bg-background text-ui-base text-foreground">
+      {error ? (
+        <div
+          role="alert"
+          className="absolute inset-x-0 top-0 z-50 flex items-center gap-3 border-b border-destructive bg-card px-3 py-2 text-ui-caption text-destructive"
+        >
+          <span className="min-w-0 flex-1">{error}</span>
+          <button
+            type="button"
+            className="rounded-lg border border-border bg-surface px-3 py-1.5"
+            onClick={() => location.reload()}
+          >
+            {t.retry}
+          </button>
+        </div>
+      ) : null}
+      {activeCustomer && modelStatusLoaded ? (
+        modelReady ? (
+          native ? (
+            <EnterpriseNativeRoot
+              runtimeKey={native.key}
+              activeCustomer={activeCustomer}
+              services={native.services}
+              platform={platform}
+              onError={setError}
+              enterpriseContext={enterpriseContext}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center p-6 text-ui-sm text-foreground-subtle">
+              {t.customerLoading}
+            </div>
+          )
+        ) : (
+          <div className="mx-auto flex min-h-full max-w-xl flex-col items-start justify-center gap-4 p-6">
+            <h1 className="text-ui-xl font-medium">{t.modelSetupTitle}</h1>
+            <p className="text-ui-sm text-foreground-subtle">{t.modelSetupHint}</p>
+            <button
+              type="button"
+              className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
+              onClick={() => setSettingsOpen(true)}
+            >
+              {t.modelSettings}
+            </button>
+          </div>
+        )
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
+          <p className="text-ui-base text-foreground-subtle">{t.noCustomer}</p>
+          <button
+            type="button"
+            className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
+            onClick={() => setSettingsOpen(true)}
+          >
+            {t.openSettings}
+          </button>
+        </div>
+      )}
+      {settingsOpen ? (
+        <EnterpriseSettings
+          t={t}
+          bootstrap={bootstrap}
+          tenantId={tenantId}
+          tenantName={selectedTenant?.name ?? t.select}
+          role={selectedTenant?.role ?? "member"}
+          csrfToken={bootstrap.csrfToken}
+          busy={busy}
+          customers={customers}
+          onCustomersChange={setCustomers}
+          onClose={() => {
+            setSettingsOpen(false);
+            void refreshModelStatus();
+          }}
+          onLogout={logout}
+          onTenantChange={changeTenant}
+        />
+      ) : null}
+    </div>
   );
 }

@@ -41,7 +41,56 @@ const CUSTOMER_MCP_BINDINGS_V4 = `
     name TEXT NOT NULL,
     endpoint TEXT NOT NULL,
     secret_ref TEXT,
+    token TEXT NOT NULL,
     created_at TEXT NOT NULL
+  );
+`;
+
+const TENANT_SKILLS_V5 = `
+  CREATE TABLE IF NOT EXISTS tenant_skills (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS tenant_skills_tenant_idx ON tenant_skills(tenant_id, created_at);
+`;
+
+const TENANT_MODEL_PROVIDERS_V7 = `
+  CREATE TABLE IF NOT EXISTS tenant_model_providers (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    provider_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    api_type TEXT NOT NULL,
+    base_url TEXT NOT NULL,
+    api_key_encrypted TEXT NOT NULL,
+    models TEXT NOT NULL DEFAULT '[]',
+    default_model TEXT NOT NULL DEFAULT '',
+    is_default INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tenant_id, provider_key)
+  );
+  CREATE INDEX IF NOT EXISTS tenant_model_providers_tenant_idx
+    ON tenant_model_providers(tenant_id, is_default DESC, created_at);
+`;
+
+const TENANT_MCP_CONNECTORS_V7 = `
+  CREATE TABLE IF NOT EXISTS tenant_mcp_connectors (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    connector_key TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    header_name TEXT NOT NULL DEFAULT 'Authorization',
+    secret_env TEXT NOT NULL DEFAULT '',
+    token TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(tenant_id, connector_key)
   );
 `;
 
@@ -68,9 +117,14 @@ ${CUSTOMER_SKILLS_V4}${CUSTOMER_MCP_BINDINGS_V4}
   );
 `;
 
-export function migrateStoreSchema(db: DatabaseSync): void {
+/** v7 迁移钩子:在同一事务内把 legacy 单凭据 seed 成目录行(需要调用方的加密器)。 */
+export interface StoreSchemaHooks {
+  seedTenantCatalogV7?: (db: DatabaseSync) => void;
+}
+
+export function migrateStoreSchema(db: DatabaseSync, hooks: StoreSchemaHooks = {}): void {
   const version = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
-  if (version > 4) throw new EnterpriseError("conflict");
+  if (version > 7) throw new EnterpriseError("conflict");
   if (version === 0) {
     transaction(db, () => {
       db.exec(`
@@ -95,8 +149,8 @@ export function migrateStoreSchema(db: DatabaseSync): void {
           PRIMARY KEY (tenant_id, provider_family),
           CHECK ((revoked_at IS NULL AND ciphertext IS NOT NULL AND nonce IS NOT NULL AND auth_tag IS NOT NULL) OR revoked_at IS NOT NULL)
         );
-        ${CUSTOMER_SCHEMA_V4}
-        PRAGMA user_version = 4;
+        ${CUSTOMER_SCHEMA_V4}${TENANT_SKILLS_V5}${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}
+        PRAGMA user_version = 7;
       `);
     });
     ensureModelCredentialMetadataColumns(db);
@@ -236,6 +290,42 @@ ${CUSTOMER_SKILLS_V4}${CUSTOMER_MCP_BINDINGS_V4}
     } finally {
       db.exec("PRAGMA foreign_keys = ON");
     }
+  }
+  const afterV4 = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
+  if (afterV4 === 4) {
+    // v5 新增租户级共享 Skill：非破坏性变更，仅加表。
+    transaction(db, () => {
+      db.exec(`
+${TENANT_SKILLS_V5}
+        PRAGMA user_version = 5;
+      `);
+    });
+  }
+  const afterV5 = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
+  if (afterV5 === 5) {
+    // v6 给 MCP 绑定加稳定中继令牌：专家 runtime 共享同一份工作区配置，
+    // 令牌必须跨网关重启稳定，存库而不是进程内存。
+    transaction(db, () => {
+      const hasToken = all(db, "PRAGMA table_info(customer_mcp_bindings)").some(
+        (column) => column.name === "token",
+      );
+      if (!hasToken) {
+        db.exec("ALTER TABLE customer_mcp_bindings ADD COLUMN token TEXT");
+      }
+      // 存量行在下次物化时补令牌；这里先给非 NULL 约束填占位值。
+      db.exec("UPDATE customer_mcp_bindings SET token='' WHERE token IS NULL");
+      db.exec("PRAGMA user_version = 6");
+    });
+  }
+  const afterV6 = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
+  if (afterV6 === 6) {
+    // v7 新增租户模型供应商目录与系统连接器；legacy 单凭据在同一事务内
+    // seed 成目录行。seed 失败会回滚整个迁移，operator 修正密钥后可重试。
+    transaction(db, () => {
+      db.exec(`${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}
+        PRAGMA user_version = 7;`);
+      hooks.seedTenantCatalogV7?.(db);
+    });
   }
   ensureModelCredentialMetadataColumns(db);
 }

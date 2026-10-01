@@ -7,8 +7,6 @@ const MODEL_CREDENTIAL_KEY_ENV = "ZCODE_ENTERPRISE_MODEL_CREDENTIALS_KEY";
 const MODEL_CREDENTIAL_KEY_VERSION = 1;
 const GCM_NONCE_BYTES = 12;
 const AES_KEY_BYTES = 32;
-const DEFAULT_CUSTOM_PROVIDER_NAME = "Custom provider";
-const DEFAULT_LEGACY_MODEL_ID = "default-model";
 
 const blockedModelIpv4Subnets = [
   "0.0.0.0/8",
@@ -43,85 +41,15 @@ const blockedModelIpv6Subnets = [
 
 export type ModelCredentialEncryptionKey = string | Uint8Array;
 
-/** Enterprise mode exposes one deliberately generic provider slot. */
-export const MODEL_PROVIDER_FAMILIES = ["custom"] as const;
-export type ModelProviderFamily = (typeof MODEL_PROVIDER_FAMILIES)[number];
-
-/** These are the native wire formats supported by the enterprise relay. */
+/** These are the native wire formats supported by the enterprise gateway. */
 export const MODEL_API_TYPES = ["anthropic-messages", "openai-chat-completions"] as const;
 export type ModelApiType = (typeof MODEL_API_TYPES)[number];
-
-export interface ModelCredentialInput {
-  providerFamily: ModelProviderFamily;
-  providerName?: string;
-  apiType: ModelApiType;
-  baseUrl: string;
-  modelId: string;
-  apiKey: string;
-}
-
-export interface ModelCredentialDetails {
-  providerName?: string;
-  apiType?: ModelApiType;
-  baseUrl?: string;
-  modelId?: string;
-}
-
-export interface NormalizedModelCredentialInput {
-  providerFamily: ModelProviderFamily;
-  providerName: string;
-  apiType: ModelApiType;
-  baseUrl: string;
-  modelId: string;
-  apiKey: string;
-}
-
-export interface ModelCredentialStatus {
-  tenantId: string;
-  providerFamily: ModelProviderFamily;
-  providerName: string;
-  apiType: ModelApiType;
-  baseUrl: string;
-  modelId: string;
-  status: "configured" | "revoked";
-  configured: boolean;
-  lastFour: string | null;
-  updatedAt: string;
-}
-
-/** The decrypted value is an internal gateway capability; never serialize it to a browser. */
-export interface GatewayModelCredential {
-  tenantId: string;
-  providerFamily: ModelProviderFamily;
-  providerName: string;
-  apiType: ModelApiType;
-  baseUrl: string;
-  modelId: string;
-  apiKey: string;
-}
 
 export interface EncryptedModelCredential {
   keyVersion: number;
   ciphertext: string;
   nonce: string;
   authTag: string;
-}
-
-export interface EncryptedModelCredentialRow {
-  tenantId: string;
-  providerFamily: string;
-  providerName: string | null;
-  apiType: string | null;
-  baseUrl: string | null;
-  modelId: string | null;
-  keyVersion: number;
-  ciphertext: string | null;
-  nonce: string | null;
-  authTag: string | null;
-  lastFour: string | null;
-  createdAt: string;
-  updatedAt: string;
-  revokedAt: string | null;
 }
 
 const invalid = (): never => {
@@ -154,16 +82,9 @@ export function resolveModelCredentialKey(
 
   const normalized = value.trim();
   if (normalized.startsWith("base64:")) return decodeBase64(normalized.slice("base64:".length));
-  if (normalized.startsWith("hex:")) return decodeHex(normalized.slice("hex:".length));
+  if (normalized.startsWith("hex:")) return decodeHex(normalized);
   if (/^[0-9a-fA-F]{64}$/.test(normalized)) return decodeHex(normalized);
   return decodeBase64(normalized);
-}
-
-export function normalizeProviderFamily(value: string): ModelProviderFamily {
-  if (typeof value !== "string") invalid();
-  const normalized = value.trim().toLowerCase();
-  if (normalized !== "custom") invalid();
-  return normalized as ModelProviderFamily;
 }
 
 export function normalizeModelApiType(value: string): ModelApiType {
@@ -234,48 +155,8 @@ export function keyLastFour(apiKey: string): string | null {
   return characters.length >= 4 ? characters.slice(-4).join("") : null;
 }
 
-export function normalizeModelCredentialInput(
-  input: ModelCredentialInput,
-): NormalizedModelCredentialInput {
-  if (
-    !input ||
-    typeof input !== "object" ||
-    typeof input.providerFamily !== "string" ||
-    (typeof input.providerName !== "undefined" && typeof input.providerName !== "string") ||
-    typeof input.apiType !== "string" ||
-    typeof input.baseUrl !== "string" ||
-    typeof input.modelId !== "string" ||
-    typeof input.apiKey !== "string"
-  )
-    invalid();
-  const providerFamily = normalizeProviderFamily(input.providerFamily);
-  const providerName = (input.providerName ?? DEFAULT_CUSTOM_PROVIDER_NAME).trim();
-  const modelId = input.modelId.trim();
-  const apiKey = input.apiKey;
-  if (
-    !providerName ||
-    providerName.length > 128 ||
-    providerName.includes("\0") ||
-    !modelId ||
-    modelId.length > 256 ||
-    modelId.includes("\0") ||
-    typeof apiKey !== "string" ||
-    !apiKey.trim() ||
-    apiKey.includes("\0")
-  )
-    invalid();
-  return {
-    providerFamily,
-    providerName,
-    apiType: normalizeModelApiType(input.apiType),
-    baseUrl: normalizeModelBaseUrl(input.baseUrl),
-    modelId,
-    apiKey,
-  };
-}
-
-function associatedData(tenantId: string, providerFamily: string): Buffer {
-  return Buffer.from(`${tenantId}\0${providerFamily}`, "utf8");
+function associatedData(tenantId: string, bindingKey: string): Buffer {
+  return Buffer.from(`${tenantId}\0${bindingKey}`, "utf8");
 }
 
 export class ModelCredentialCipher {
@@ -285,10 +166,10 @@ export class ModelCredentialCipher {
     this.key = resolveModelCredentialKey(key);
   }
 
-  encrypt(apiKey: string, tenantId: string, providerFamily: string): EncryptedModelCredential {
+  encrypt(apiKey: string, tenantId: string, bindingKey: string): EncryptedModelCredential {
     const nonce = randomBytes(GCM_NONCE_BYTES);
     const cipher = createCipheriv("aes-256-gcm", this.key, nonce);
-    cipher.setAAD(associatedData(tenantId, providerFamily));
+    cipher.setAAD(associatedData(tenantId, bindingKey));
     const ciphertext = Buffer.concat([cipher.update(apiKey, "utf8"), cipher.final()]);
     return {
       keyVersion: MODEL_CREDENTIAL_KEY_VERSION,
@@ -298,7 +179,7 @@ export class ModelCredentialCipher {
     };
   }
 
-  decrypt(row: EncryptedModelCredential, tenantId: string, providerFamily: string): string {
+  decrypt(row: EncryptedModelCredential, tenantId: string, bindingKey: string): string {
     if (row.keyVersion !== MODEL_CREDENTIAL_KEY_VERSION) throw new EnterpriseError("conflict");
     try {
       const nonce = Buffer.from(row.nonce, "base64");
@@ -307,7 +188,7 @@ export class ModelCredentialCipher {
       if (nonce.length !== GCM_NONCE_BYTES || authTag.length !== 16 || ciphertext.length === 0)
         throw new Error("invalid encrypted credential");
       const decipher = createDecipheriv("aes-256-gcm", this.key, nonce);
-      decipher.setAAD(associatedData(tenantId, providerFamily));
+      decipher.setAAD(associatedData(tenantId, bindingKey));
       decipher.setAuthTag(authTag);
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
     } catch {
@@ -315,29 +196,4 @@ export class ModelCredentialCipher {
       throw new EnterpriseError("conflict");
     }
   }
-}
-
-function safeApiType(value: string | null): ModelApiType {
-  return value === "openai-chat-completions" ? value : "anthropic-messages";
-}
-
-function valueOrDefault(value: string | null, fallback: string): string {
-  return value && value.trim() ? value : fallback;
-}
-
-export function toModelCredentialStatus(row: EncryptedModelCredentialRow): ModelCredentialStatus {
-  const configured =
-    row.revokedAt == null && row.ciphertext != null && row.nonce != null && row.authTag != null;
-  return {
-    tenantId: row.tenantId,
-    providerFamily: "custom",
-    providerName: valueOrDefault(row.providerName, DEFAULT_CUSTOM_PROVIDER_NAME),
-    apiType: safeApiType(row.apiType),
-    baseUrl: valueOrDefault(row.baseUrl, ""),
-    modelId: valueOrDefault(row.modelId, DEFAULT_LEGACY_MODEL_ID),
-    status: configured ? "configured" : "revoked",
-    configured,
-    lastFour: configured ? row.lastFour : null,
-    updatedAt: row.updatedAt,
-  };
 }

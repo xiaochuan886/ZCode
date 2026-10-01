@@ -9,33 +9,86 @@ export interface Tenant {
   role?: "admin" | "member";
 }
 export type ModelApiType = "anthropic-messages" | "openai-chat-completions";
-export interface ModelCredentialInput {
-  providerName?: string;
+/** Provider catalog row projection: the API key never leaves the server, only its last four. */
+export interface ModelProviderView {
+  id: string;
+  providerKey: string;
+  displayName: string;
   apiType: ModelApiType;
   baseUrl: string;
-  modelId: string;
+  models: string[];
+  defaultModel: string | null;
+  isDefault: boolean;
+  enabled: boolean;
+  apiKeyLast4: string;
+}
+export interface ModelProviderInput {
+  providerKey: string;
+  displayName: string;
+  apiType: ModelApiType;
+  baseUrl: string;
   apiKey: string;
+  models?: string[];
+  defaultModel?: string;
+  isDefault?: boolean;
+  enabled?: boolean;
 }
-export function isCompleteModelCredentialInput(input: ModelCredentialInput): boolean {
-  return Boolean(
-    (input.apiType === "anthropic-messages" || input.apiType === "openai-chat-completions") &&
-    input.baseUrl.trim() &&
-    input.modelId.trim() &&
-    input.apiKey.trim(),
-  );
-}
-export interface ModelCredentialStatus {
-  tenantId: string;
-  providerFamily: "custom";
-  /** Metadata is optional for rows created before the generic provider migration. */
-  providerName?: string;
+/** 编辑时 apiKey 留空表示保留现有密钥,因此 patch 中该字段可省略。 */
+export interface ModelProviderPatch {
+  displayName?: string;
   apiType?: ModelApiType;
   baseUrl?: string;
-  modelId?: string;
-  status: "configured" | "revoked";
-  configured: boolean;
-  lastFour: string | null;
-  updatedAt: string;
+  apiKey?: string;
+  models?: string[];
+  defaultModel?: string | null;
+  isDefault?: boolean;
+  enabled?: boolean;
+}
+export interface ModelProviderTestResult {
+  ok: boolean;
+  models?: string[];
+  error?: string;
+}
+/** Tenant connector (系统连接器) row projection; the relay token and secret stay server-side. */
+export interface TenantMcpConnectorView {
+  id: string;
+  connectorKey: string;
+  displayName: string;
+  endpointHost: string;
+  headerName: string;
+  secretConfigured: boolean;
+  enabled: boolean;
+}
+export interface TenantMcpConnectorInput {
+  connectorKey: string;
+  displayName: string;
+  url: string;
+  headerName?: string;
+  secretEnv: string;
+}
+export interface TenantMcpConnectorPatch {
+  displayName?: string;
+  url?: string;
+  headerName?: string;
+  secretEnv?: string;
+  enabled?: boolean;
+}
+export interface ImportableTenantSkillView {
+  name: string;
+  description: string;
+  origin: "home" | "workspace";
+  workspaceId: string | null;
+  workspaceName: string | null;
+  alreadyImported: boolean;
+}
+export interface TenantSkillImportInput {
+  name: string;
+  origin: "home" | "workspace";
+  workspaceId?: string | null;
+}
+export interface ImportedTenantSkill {
+  ok: boolean;
+  skill: { id: string; name: string };
 }
 export interface Customer {
   id: string;
@@ -64,6 +117,13 @@ export interface EnterpriseBootstrap {
   tenants: Tenant[];
   activeCustomer: ActiveCustomer | null;
   csrfToken: string | null;
+}
+export interface TenantSkillView {
+  id: string;
+  tenantId: string;
+  name: string;
+  content: string;
+  createdAt: string;
 }
 export class EnterpriseApiError extends Error {
   readonly status: number;
@@ -148,20 +208,86 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
       ),
     activateCustomer: (id: string, token: string | null) =>
       post<void>(`/customers/${encodeURIComponent(id)}/activate`, {}, token),
-    modelCredentials: (tenantId: string) =>
-      request<ModelCredentialStatus[]>(
-        `/tenants/${encodeURIComponent(tenantId)}/model-credentials`,
-      ),
-    saveModelCredential: (tenantId: string, input: ModelCredentialInput, token: string | null) =>
-      request<ModelCredentialStatus>(
-        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/custom`,
-        { method: "PUT", body: JSON.stringify(input) },
+    updateCustomer: (id: string, input: { name?: string; type?: string }, token: string | null) =>
+      request<Customer>(
+        `/customers/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(input) },
         token,
       ),
-    revokeModelCredential: (tenantId: string, token: string | null) =>
-      request<ModelCredentialStatus>(
-        `/tenants/${encodeURIComponent(tenantId)}/model-credentials/custom`,
+    deleteCustomer: (id: string, token: string | null) =>
+      request<{ ok: boolean }>(`/customers/${encodeURIComponent(id)}`, { method: "DELETE" }, token),
+    tenantSkills: async (tenantId: string) => {
+      const body = await request<{ items: TenantSkillView[] } | TenantSkillView[]>(
+        `/tenants/${encodeURIComponent(tenantId)}/skills`,
+      );
+      return records(body);
+    },
+    createTenantSkill: (
+      tenantId: string,
+      input: { name: string; content: string },
+      token: string | null,
+    ) =>
+      post<TenantSkillView>(
+        `/tenants/${encodeURIComponent(tenantId)}/skills`,
+        { name: input.name.trim(), content: input.content },
+        token,
+      ),
+    deleteTenantSkill: (tenantId: string, skillId: string, token: string | null) =>
+      request<{ ok: boolean }>(
+        `/tenants/${encodeURIComponent(tenantId)}/skills/${encodeURIComponent(skillId)}`,
         { method: "DELETE" },
+        token,
+      ),
+    modelProviders: (tenantId: string) =>
+      request<ModelProviderView[]>(`/tenants/${encodeURIComponent(tenantId)}/model-providers`),
+    createModelProvider: (tenantId: string, input: ModelProviderInput, token: string | null) =>
+      post<ModelProviderView>(
+        `/tenants/${encodeURIComponent(tenantId)}/model-providers`,
+        input,
+        token,
+      ),
+    updateModelProvider: (id: string, patch: ModelProviderPatch, token: string | null) =>
+      request<ModelProviderView>(
+        `/model-providers/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+        token,
+      ),
+    deleteModelProvider: (id: string, token: string | null) =>
+      request<{ ok: boolean }>(
+        `/model-providers/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+        token,
+      ),
+    testModelProvider: (id: string, token: string | null) =>
+      post<ModelProviderTestResult>(`/model-providers/${encodeURIComponent(id)}/test`, {}, token),
+    mcpConnectors: (tenantId: string) =>
+      request<TenantMcpConnectorView[]>(`/tenants/${encodeURIComponent(tenantId)}/mcp-connectors`),
+    createMcpConnector: (tenantId: string, input: TenantMcpConnectorInput, token: string | null) =>
+      post<TenantMcpConnectorView>(
+        `/tenants/${encodeURIComponent(tenantId)}/mcp-connectors`,
+        input,
+        token,
+      ),
+    updateMcpConnector: (id: string, patch: TenantMcpConnectorPatch, token: string | null) =>
+      request<TenantMcpConnectorView>(
+        `/mcp-connectors/${encodeURIComponent(id)}`,
+        { method: "PATCH", body: JSON.stringify(patch) },
+        token,
+      ),
+    deleteMcpConnector: (id: string, token: string | null) =>
+      request<{ ok: boolean }>(
+        `/mcp-connectors/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+        token,
+      ),
+    importableSkills: (tenantId: string) =>
+      request<ImportableTenantSkillView[]>(
+        `/tenants/${encodeURIComponent(tenantId)}/importable-skills`,
+      ),
+    importTenantSkill: (tenantId: string, input: TenantSkillImportInput, token: string | null) =>
+      post<ImportedTenantSkill>(
+        `/tenants/${encodeURIComponent(tenantId)}/skills/import`,
+        input,
         token,
       ),
   };

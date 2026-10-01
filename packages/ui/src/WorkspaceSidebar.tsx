@@ -116,6 +116,7 @@ import { WorkspaceFileTree } from "@/WorkspaceFileTree.js";
 import { WorkspaceArchivedTasksFlatSection } from "@/WorkspaceArchivedTasksFlatSection.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { WorkspaceSidebarItem } from "@/WorkspaceSidebarItem.js";
+import { openEnterpriseWorkspace } from "@/enterprise/enterpriseWorkspaceBridge.js";
 import { WorkspacePinnedTasksSection } from "@/WorkspacePinnedTasksSection.js";
 import { WorkspaceTimelineTasksSection } from "@/WorkspaceTimelineTasksSection.js";
 import { WorkspaceGroupedTasksSection } from "@/WorkspaceGroupedTasksSection.js";
@@ -156,8 +157,9 @@ function WorkspaceNewTaskTooltip({
   );
 }
 
-// 企业模式把客户摘要复用为原生 Projects 行；这里只触发 Web 的客户切换回调，
-// 不把客户路径写入原生 workspace tab，确保当前 runtime 仍只有一个实际工作区。
+// 企业模式把客户摘要复用为原生 Projects 行。专家模型下其他客户行点击 =
+// 在当前 runtime 内把该客户工作区打开为原生 tab(桥接到 Root 的工作区选择)，
+// 同时通知 Web 壳层记账(激活)以便下次进入直接落在这个客户。
 function EnterpriseCustomerProjectList({
   context,
   activeCustomerWorkspaceItem,
@@ -166,25 +168,25 @@ function EnterpriseCustomerProjectList({
   activeCustomerWorkspaceItem?: ReactNode;
 }) {
   const { intl } = useZCodeIntl();
-  const [switchingCustomerId, setSwitchingCustomerId] = useState<string | null>(null);
 
-  const handleCustomerChange = useCallback(
-    (customerId: string) => {
-      if (customerId === context.activeCustomerId || switchingCustomerId) {
+  const handleCustomerOpen = useCallback(
+    (customer: { id: string; workspacePath?: string }) => {
+      if (customer.id === context.activeCustomerId && !customer.workspacePath) {
         return;
       }
-      setSwitchingCustomerId(customerId);
+      if (customer.workspacePath) {
+        openEnterpriseWorkspace(customer.workspacePath);
+      }
       Promise.resolve()
-        .then(() => context.onSelectCustomer(customerId))
+        .then(() => context.onSelectCustomer(customer.id))
         .catch((error) => {
-          logger.warn("[WorkspaceSidebar] 企业客户切换失败", {
-            customerId,
+          logger.warn("[WorkspaceSidebar] 企业客户激活记账失败", {
+            customerId: customer.id,
             error: error instanceof Error ? error.message : String(error),
           });
-        })
-        .finally(() => setSwitchingCustomerId(null));
+        });
     },
-    [context, switchingCustomerId],
+    [context],
   );
 
   return (
@@ -198,7 +200,7 @@ function EnterpriseCustomerProjectList({
         const isActiveCustomer = customer.id === context.activeCustomerId;
         if (isActiveCustomer && activeCustomerWorkspaceItem) {
           // 当前客户直接复用原生 workspace 行，任务子项、归档、更多操作和加载态都沿用
-          // 原实现；其他客户只保留授权摘要和切换回调，避免把其他 runtime 注入原生 tabs。
+          // 原实现;其他客户行走原生工作区打开桥,共享同一专家 runtime。
           return <Fragment key={customer.id}>{activeCustomerWorkspaceItem}</Fragment>;
         }
         return (
@@ -213,8 +215,7 @@ function EnterpriseCustomerProjectList({
               )}
               aria-current={isActiveCustomer ? "page" : undefined}
               data-customer-id={customer.id}
-              disabled={switchingCustomerId !== null}
-              onClick={() => handleCustomerChange(customer.id)}
+              onClick={() => handleCustomerOpen(customer)}
             >
               {isActiveCustomer ? (
                 <FolderOpen className="size-4 shrink-0 text-foreground-subtle" />

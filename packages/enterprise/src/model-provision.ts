@@ -1,42 +1,50 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
-import {
-  normalizeModelCredentialInput,
-  type GatewayModelCredential,
-} from "./model-credentials.js";
+import { PROVIDER_KEY_PATTERN } from "./provider-format.js";
 import { EnterpriseError } from "./types.js";
 
-/** Enterprise mode has one generic provider slot; fixed Z.ai/BigModel slots are not provisioned. */
-export const enterpriseModelProviders = ["custom"] as const;
-export type EnterpriseModelProvider = (typeof enterpriseModelProviders)[number];
-export const ENTERPRISE_MODEL_PROVIDER_ID = "enterprise-custom";
+/** One enabled tenant catalog provider as handed to the distribution step. */
+export interface ExpertModelProviderSlot {
+  tenantId: string;
+  providerKey: string;
+  displayName: string;
+  apiType: string;
+  baseUrl: string;
+  apiKey: string;
+  models: string[];
+  defaultModel: string;
+  isDefault: boolean;
+}
 
-function managedProviderRule(credential: ReturnType<typeof normalizeModelCredentialInput>) {
+/** Managed provider slot id: `enterprise-<provider_key>`; unmanaged entries are preserved. */
+export const managedModelProviderId = (providerKey: string): string => `enterprise-${providerKey}`;
+
+function isManagedProviderId(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  // legacy 固定槽位(enterprise-zai-api / enterprise-bigmodel-api)同样由该前缀规则覆盖。
+  return value.startsWith("enterprise-")
+    ? PROVIDER_KEY_PATTERN.test(value.slice("enterprise-".length))
+    : false;
+}
+
+function managedProviderRule(provider: ExpertModelProviderSlot) {
+  const models = provider.models.length ? provider.models : [provider.defaultModel].filter(Boolean);
   return {
-    providerId: ENTERPRISE_MODEL_PROVIDER_ID,
-    providerName: credential.providerName,
+    providerId: managedModelProviderId(provider.providerKey),
+    providerName: provider.displayName,
     config: {
       group: "standard-personal" as const,
       // 服务端分发：写入真实上游地址与真实 API key，原生 runtime 直连供应商。
-      // 不再经过网关中继，避免中继的公网 DNS 校验在 fake-IP 代理环境下拒绝请求。
-      access: { type: "api-key" as const, apiKey: credential.apiKey },
+      access: { type: "api-key" as const, apiKey: provider.apiKey },
       api: {
-        type: credential.apiType,
-        baseUrl: credential.baseUrl,
+        type: provider.apiType,
+        baseUrl: provider.baseUrl,
       },
-      personalModelIds: [credential.modelId],
-      modelOrder: [credential.modelId],
+      personalModelIds: models,
+      modelOrder: models,
     },
   };
-}
-
-function isManagedProviderId(value: unknown): boolean {
-  return (
-    value === ENTERPRISE_MODEL_PROVIDER_ID ||
-    value === "enterprise-zai-api" ||
-    value === "enterprise-bigmodel-api"
-  );
 }
 
 function unmanagedProviderRules(value: unknown): unknown[] {
@@ -90,47 +98,53 @@ async function readPreviousConfig(target: string): Promise<Record<string, unknow
 }
 
 /**
- * Distribute the tenant credential into a Customer runtime. The runtime receives the real
- * upstream base URL and API key in the managed `enterprise-custom` slot and connects to the
- * provider directly with the native provider stack.
+ * Distribute the tenant provider catalog into an expert runtime. Every enabled provider
+ * becomes a managed `enterprise-<provider_key>` slot carrying the real upstream base URL,
+ * the real API key and its model list; the tenant-default provider pins the default model.
+ * The managed slot set is replaced atomically on every prepare; unmanaged entries survive.
  */
-export async function provisionCustomerModelProvider(input: {
-  customerId: string;
+export async function provisionExpertModelProviders(input: {
+  runtimeOwner: string;
   tenantId: string;
   runtimeDataRoot: string;
-  credential: GatewayModelCredential | null;
+  providers: ExpertModelProviderSlot[];
 }): Promise<void> {
-  if (!input.customerId.trim() || !input.tenantId.trim())
-    throw new Error("invalid Customer model scope");
-  const suppliedCredential = input.credential;
-  const credential = suppliedCredential ? normalizeModelCredentialInput(suppliedCredential) : null;
-  if (credential && suppliedCredential && suppliedCredential.tenantId !== input.tenantId)
-    throw new EnterpriseError("validation");
+  if (!input.runtimeOwner.trim() || !input.tenantId.trim())
+    throw new Error("invalid expert runtime model scope");
+  for (const provider of input.providers) {
+    if (provider.tenantId !== input.tenantId) throw new EnterpriseError("validation");
+  }
+  const managedRules = input.providers.map((provider) => managedProviderRule(provider));
+  const managedIds = managedRules.map((rule) => rule.providerId);
+  const defaultProvider = input.providers.find((provider) => provider.isDefault);
 
-  const managedRule = credential ? managedProviderRule(credential) : null;
-
-  const configDir = join(input.runtimeDataRoot, input.customerId, ".zcode", "v2");
+  const configDir = join(input.runtimeDataRoot, input.runtimeOwner, ".zcode", "v2");
   const target = join(configDir, "provider_config.json");
   const previous = await readPreviousConfig(target);
   const oldConfig = previous?.config as Record<string, unknown> | undefined;
   const oldProviderRules = (
     oldConfig?.providerConfigRules as { providerRules?: unknown[] } | undefined
   )?.providerRules;
-  const providerRules = managedRule
-    ? [managedRule, ...unmanagedProviderRules(oldProviderRules)]
-    : unmanagedProviderRules(oldProviderRules);
+  const providerRules = [...managedRules, ...unmanagedProviderRules(oldProviderRules)];
   const providerOrder = unique([
-    ...(managedRule ? [ENTERPRISE_MODEL_PROVIDER_ID] : []),
+    ...managedIds,
     ...unmanagedProviderOrder(oldConfig?.providerOrder),
   ]);
   const oldDefault = oldConfig?.defaultModelSelection;
-  const defaultModelSelection = managedRule
-    ? { providerId: ENTERPRISE_MODEL_PROVIDER_ID, modelId: credential!.modelId }
-    : oldDefault &&
-        typeof oldDefault === "object" &&
-        !Array.isArray(oldDefault) &&
-        !isManagedProviderId((oldDefault as { providerId?: unknown }).providerId)
-      ? oldDefault
+  const previousDefault =
+    oldDefault && typeof oldDefault === "object" && !Array.isArray(oldDefault)
+      ? (oldDefault as { providerId?: unknown; modelId?: unknown })
+      : undefined;
+  const defaultModelSelection = defaultProvider
+    ? {
+        providerId: managedModelProviderId(defaultProvider.providerKey),
+        modelId: defaultProvider.defaultModel || defaultProvider.models[0] || "",
+      }
+    : previousDefault &&
+        typeof previousDefault.providerId === "string" &&
+        typeof previousDefault.modelId === "string" &&
+        !isManagedProviderId(previousDefault.providerId)
+      ? { providerId: previousDefault.providerId, modelId: previousDefault.modelId }
       : undefined;
   const modelConfigRules = unmanagedModelRules(oldConfig?.modelConfigRules);
   const contents = {
@@ -139,7 +153,7 @@ export async function provisionCustomerModelProvider(input: {
       providerOrder,
       providerConfigRules: { providerRules },
       modelConfigRules,
-      ...(defaultModelSelection ? { defaultModelSelection } : {}),
+      ...(defaultModelSelection && defaultModelSelection.modelId ? { defaultModelSelection } : {}),
     },
   };
   await mkdir(configDir, { recursive: true, mode: 0o700 });

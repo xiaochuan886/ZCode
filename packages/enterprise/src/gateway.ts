@@ -8,17 +8,10 @@ import { nativePathAllowed, proxyHttp } from "./proxy.js";
 import { handleEnterpriseApiRequest } from "./enterprise-api.js";
 import type { GatewayOptions } from "./gateway-types.js";
 import { attachEnterpriseWebSocketHandler } from "./gateway-websocket.js";
-import {
-  handleMcpRelayRequest,
-  McpRelayConcurrencyLimiter,
-  type RelayCredential,
-} from "./mcp-relay.js";
+import { handleMcpRelayRequest, McpRelayConcurrencyLimiter } from "./mcp-relay.js";
 import { cookies } from "./gateway-cookies.js";
-import { prepareCustomer } from "./gateway-prepare.js";
-import {
-  publicCustomer,
-  runtimeTargetsForTenant,
-} from "./gateway-runtime.js";
+import { prepareExpertRuntime } from "./gateway-prepare.js";
+import { publicCustomer, runtimeTargetsForTenant } from "./gateway-runtime.js";
 
 const mime: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -59,9 +52,7 @@ function origin(request: IncomingMessage, configured?: string): string {
   return configured ?? `http://${request.headers.host ?? "localhost"}`;
 }
 
-function relayOrigin(request: IncomingMessage, options: GatewayOptions): string {
-  const value =
-    options.relayOrigin ?? options.expectedOrigin ?? origin(request, options.expectedOrigin);
+function validatedOrigin(value: string): string {
   const parsed = new URL(value);
   if (
     (parsed.protocol !== "http:" && parsed.protocol !== "https:") ||
@@ -75,6 +66,12 @@ function relayOrigin(request: IncomingMessage, options: GatewayOptions): string 
   return parsed.origin;
 }
 
+function relayOrigin(request: IncomingMessage, options: GatewayOptions): string {
+  return validatedOrigin(
+    options.relayOrigin ?? options.expectedOrigin ?? origin(request, options.expectedOrigin),
+  );
+}
+
 function sessionFor(request: IncomingMessage, auth: EnterpriseAuth): EnterpriseSession | null {
   const token = cookies(request).get("enterprise_session");
   return token ? auth.resolveSession(token) : null;
@@ -83,7 +80,6 @@ function sessionFor(request: IncomingMessage, auth: EnterpriseAuth): EnterpriseS
 export function createEnterpriseGateway(options: GatewayOptions) {
   const sockets = new Map<string, Set<Duplex>>();
   const socketUsers = new Map<string, string>();
-  const relayCredentials = new Map<string, Map<string, RelayCredential>>();
   const relayLimiter = new McpRelayConcurrencyLimiter();
   const closeSockets = (sessionId: string) => {
     for (const socket of sockets.get(sessionId) ?? []) socket.destroy();
@@ -97,34 +93,50 @@ export function createEnterpriseGateway(options: GatewayOptions) {
   };
   const stopRuntime = (value: EnterpriseRuntimeTarget) =>
     options.runtimes.stop(value, () => {
-      relayCredentials.delete(value.runtimeId);
+      // 停掉专家 runtime 前同步销毁指向它的会话 socket:半开 socket 上的 RPC 永远没有
+      // 响应,浏览器侧表现为技能面板停在"搜索中"、命令/子智能体为空。销毁后壳层的
+      // onClose 重连会拉起新 runtime 并重新分发,而不是挂在死连接上。
+      for (const [sessionId] of sockets) {
+        const active = options.store.getActiveRuntimeTarget(sessionId);
+        if (active?.runtimeId === value.runtimeId) closeSockets(sessionId);
+      }
     });
+  /** 兜底中继地址:无 operator 配置且无触发请求 origin 时按监听地址推导。 */
+  const fallbackOrigin = (): string => {
+    const address = server.address();
+    const port = address && typeof address === "object" ? address.port : (options.port ?? 3031);
+    return `http://${options.host ?? "127.0.0.1"}:${port}`;
+  };
+  /** 补齐专家目标的挂载清单:该租户全部客户工作区都会挂进这个 runtime。 */
+  const expertTargetWithWorkspaces = (value: EnterpriseRuntimeTarget): EnterpriseRuntimeTarget => {
+    const customers = options.store.listCustomers(value.userId, value.tenantId);
+    return {
+      ...value,
+      workspacePath: value.workspacePath || customers[0]?.workspacePath || "",
+      workspacePaths: customers.map((customer) => customer.workspacePath),
+    };
+  };
   const ensureRuntime = async (
-    value: EnterpriseRuntimeTarget,
-    userId: string,
-    requestOrigin: string,
+    rawValue: EnterpriseRuntimeTarget,
+    userId?: string,
+    requestOrigin?: string,
   ) => {
-    try {
-      return await options.runtimes.ensure(value, {
-        beforeStop: () => {
-          relayCredentials.delete(value.runtimeId);
-        },
-        beforeStart: async () => {
-          relayCredentials.delete(value.runtimeId);
-          await prepareCustomer(
-            options.store.getCustomer(userId, value.id),
-            options.store,
-            userId,
-            requestOrigin,
-            relayCredentials,
-            options.modelRuntimeDataRoot,
-          );
-        },
-      });
-    } catch (error) {
-      relayCredentials.delete(value.runtimeId);
-      throw error;
-    }
+    const value = expertTargetWithWorkspaces(rawValue);
+    // 专家 runtime 准备:供应商目录 + 租户共享 Skill + 系统连接器下发到专家数据卷。
+    // workspacePaths 同时提供挂载清单,让容器把租户全部客户工作区挂进来。
+    return await options.runtimes.ensure(value, {
+      beforeStart: async () => {
+        await prepareExpertRuntime({
+          target: value,
+          store: options.store,
+          runtimeDataRoot: options.modelRuntimeDataRoot,
+          // 中继地址优先用 operator 配置;否则取触发请求的 origin(两个调用方都有请求)。
+          relayOrigin: validatedOrigin(
+            options.relayOrigin ?? options.expectedOrigin ?? requestOrigin ?? fallbackOrigin(),
+          ),
+        });
+      },
+    });
   };
 
   const server = createServer(async (request, response) => {
@@ -182,7 +194,6 @@ export function createEnterpriseGateway(options: GatewayOptions) {
           request,
           response,
           options.store,
-          relayCredentials,
           options.fetchImpl ?? fetch,
           options.mcpDnsLookup,
           relayLimiter,
@@ -238,14 +249,13 @@ export function createEnterpriseGateway(options: GatewayOptions) {
             request.headers["x-csrf-token"]?.toString() ?? null,
           );
         }
-        const binding = await ensureRuntime(value, session.userId, relayOrigin(request, options));
+        const binding = await ensureRuntime(
+          value,
+          session.userId,
+          origin(request, options.expectedOrigin),
+        );
         if (!options.auth.resolveSession(cookies(request).get("enterprise_session") ?? "")) {
           send(response, 401, { error: "Unauthorized" });
-          return;
-        }
-        const activeTarget = options.store.getActiveRuntimeTarget(session.id);
-        if (activeTarget?.runtimeId !== value.runtimeId) {
-          send(response, 403, { error: "Active customer changed" });
           return;
         }
         await proxyHttp(request, response, binding);
@@ -295,7 +305,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
     sockets,
     socketUsers,
     ensureRuntime,
-    helpers: { cookies, origin, relayOrigin, sessionFor },
+    helpers: { cookies, origin, sessionFor },
   });
 
   return {
@@ -306,7 +316,6 @@ export function createEnterpriseGateway(options: GatewayOptions) {
       ),
     close: async () => {
       for (const id of sockets.keys()) closeSockets(id);
-      relayCredentials.clear();
       try {
         await options.runtimes.stopAll();
       } finally {

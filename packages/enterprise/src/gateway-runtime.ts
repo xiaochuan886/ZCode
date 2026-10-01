@@ -11,23 +11,11 @@ export function publicCustomer(value: import("./types.js").Customer) {
   };
 }
 
+/** 租户下全部成员的专家 runtime;凭据/Skill/客户变更时逐一停止。 */
 export function runtimeTargetsForTenant(
   store: EnterpriseStore,
   actorId: string,
   tenantId: string,
 ): EnterpriseRuntimeTarget[] {
-  const targets = new Map<string, EnterpriseRuntimeTarget>();
-  for (const customer of store.listCustomers(actorId, tenantId)) {
-    const target = store.getCustomerRuntimeTarget(actorId, customer.id);
-    targets.set(target.runtimeId, target);
-  }
-  return [...targets.values()];
-}
-
-export function runtimeTargetForId(
-  store: EnterpriseStore,
-  actorId: string,
-  runtimeId: string,
-): EnterpriseRuntimeTarget {
-  return store.getCustomerRuntimeTarget(actorId, runtimeId);
+  return store.expertRuntimeTargetsForTenant(actorId, tenantId);
 }

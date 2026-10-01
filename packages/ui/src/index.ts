@@ -8,6 +8,10 @@ export {
   useAssistantCodeCommentFeatureEnabled,
 } from "./AssistantCodeCommentFeatureProvider.js";
 export { Root } from "./Root.js";
+export {
+  openEnterpriseWorkspace,
+  subscribeEnterpriseWorkspaceOpen,
+} from "./enterprise/enterpriseWorkspaceBridge.js";
 export type {
   EnterpriseCustomerSummary,
   EnterpriseRootContext,

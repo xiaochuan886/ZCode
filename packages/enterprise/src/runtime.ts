@@ -8,8 +8,10 @@ import { DatabaseSync } from "node:sqlite";
 export interface RuntimeCase {
   id: string;
   workspacePath: string;
-  /** Stable runtime owner; defaults to the Customer id. */
+  /** Stable runtime owner; the expert (user×tenant) id. */
   runtimeId?: string;
+  /** 该专家租户下全部客户工作区;容器逐一挂载并由原生 server 广播。 */
+  workspacePaths?: string[];
 }
 export interface RuntimeHandle {
   id: string;
@@ -64,23 +66,23 @@ export class RuntimeManager {
     const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
     const runtimeInput = { ...caseInfo, id: runtimeId, runtimeId };
     const current = this.live.get(runtimeId);
-    if (
-      current?.binding.workspacePath === caseInfo.workspacePath &&
-      (await this.adapter.healthy(current.handle, current.binding.token))
-    )
+    // 专家 runtime 的身份只由 runtimeId 决定:同一专家切换主工作区(最近打开的
+    // 客户)复用同一 runtime,不触发重启;只有健康检查失败才替换。
+    if (current && (await this.adapter.healthy(current.handle, current.binding.token))) {
       return current.binding;
+    }
     if (current) {
       hooks.beforeStop?.();
       this.live.delete(runtimeId);
       await current.handle.stop();
     }
-    // Case 工作区会被运行时写入；重新物化前先停止旧容器，再启动新运行时。
+    // 工作区会被运行时写入；重新物化/重新挂载前先停止旧容器，再启动新运行时。
     await this.adapter.stopStale?.(runtimeInput);
     await hooks.beforeStart?.();
     const token = randomBytes(32).toString("base64url");
     const handle = await this.adapter.start({ ...runtimeInput, token });
     const binding = {
-      caseId: caseInfo.id,
+      caseId: runtimeId,
       runtimeId,
       workspacePath: caseInfo.workspacePath,
       url: handle.url,
@@ -92,8 +94,7 @@ export class RuntimeManager {
 
   getBinding(caseInfo: RuntimeCase): RuntimeBinding | null {
     const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
-    const current = this.live.get(runtimeId);
-    return current?.binding.workspacePath === caseInfo.workspacePath ? current.binding : null;
+    return this.live.get(runtimeId)?.binding ?? null;
   }
 
   async ownsSession(caseInfo: RuntimeCase, nativeSessionId: string): Promise<boolean> {
@@ -194,6 +195,9 @@ export class ProcessRuntimeAdapter implements RuntimeAdapter {
     const port = await freePort();
     const dataDir = join(this.options.dataRoot, input.id);
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
+    const advertised = [
+      ...new Set([input.workspacePath, ...(input.workspacePaths ?? [])].filter(Boolean)),
+    ];
     const child = spawn(process.execPath, [resolve(this.options.serverEntry)], {
       cwd: input.workspacePath,
       stdio: "ignore",
@@ -202,6 +206,7 @@ export class ProcessRuntimeAdapter implements RuntimeAdapter {
         PORT: String(port),
         ZCODE_SERVER_HOST: "127.0.0.1",
         ZCODE_SERVER_WORKSPACE: input.workspacePath,
+        ...(advertised.length > 1 ? { ZCODE_SERVER_WORKSPACES: advertised.join(":") } : {}),
         ZCODE_SERVER_AUTH_TOKEN: input.token,
         ZCODE_ENTERPRISE_MANAGED_MODEL: "1",
         HOME: dataDir,
@@ -280,7 +285,16 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
     const dataDir = join(this.options.dataRoot, input.id);
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const name = `zcode-enterprise-${input.id}`;
-    const id = await this.docker([
+    // 专家容器挂载:专家 HOME 数据卷 + 租户全部客户工作区;不挂宿主 HOME 或其他租户卷。
+    const mountPaths = [
+      ...new Set(
+        [input.workspacePath, ...(input.workspacePaths ?? [])]
+          .filter(Boolean)
+          .map((path) => resolve(path)),
+      ),
+    ];
+    const advertised = [...new Set([resolve(input.workspacePath), ...mountPaths])];
+    const dockerArgs = [
       "run",
       "-d",
       "--rm",
@@ -298,9 +312,12 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
       "-p",
       "127.0.0.1::3030",
       "-v",
-      `${resolve(input.workspacePath)}:${resolve(input.workspacePath)}:rw`,
-      "-v",
       `${resolve(dataDir)}:/home/zcode:rw`,
+    ];
+    for (const path of mountPaths) {
+      dockerArgs.push("-v", `${path}:${path}:rw`);
+    }
+    dockerArgs.push(
       "-e",
       "HOME=/home/zcode",
       "-e",
@@ -309,12 +326,18 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
       "ZCODE_SERVER_HOST=0.0.0.0",
       "-e",
       `ZCODE_SERVER_WORKSPACE=${resolve(input.workspacePath)}`,
+    );
+    if (advertised.length > 1) {
+      dockerArgs.push("-e", `ZCODE_SERVER_WORKSPACES=${advertised.join(":")}`);
+    }
+    dockerArgs.push(
       "-e",
       `ZCODE_SERVER_AUTH_TOKEN=${input.token}`,
       "-e",
       "ZCODE_ENTERPRISE_MANAGED_MODEL=1",
       this.options.image,
-    ]);
+    );
+    const id = await this.docker(dockerArgs);
     const mapped = await this.docker(["port", id, "3030/tcp"]);
     const port = Number(mapped.match(/:(\d+)$/)?.[1]);
     if (!port) {

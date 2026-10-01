@@ -8,21 +8,25 @@ export interface EnterpriseRootContext {
   user: { id: string; email: string; displayName: string } | null;
   tenants: readonly { id: string; name: string; role?: "admin" | "member" }[];
   activeTenantId: string | null;
-  customers: readonly { id: string; name: string }[];
+  customers: readonly { id: string; name: string; workspacePath?: string }[];
   activeCustomerId: string | null;
   onSelectCustomer: (customerId: string) => void | Promise<void>;
+  onOpenCustomerWorkspace?: (workspacePath: string) => void | Promise<void>;
   onSelectTenant?: (tenantId: string) => void | Promise<void>;
-  onOpenModelSettings?: () => void | Promise<void>;
+  onOpenModelSettings?: () => void | void | Promise<void>;
   onOpenCustomerHome?: () => void | Promise<void>;
   onLogout?: () => void | Promise<void>;
 }
 export function EnterpriseNativeRoot({
+  runtimeKey,
   activeCustomer,
   services,
   platform,
   onError,
   enterpriseContext,
 }: {
+  /** 专家 runtime 会话标识(用户×租户);客户切换不重挂 Root。 */
+  runtimeKey: string;
   activeCustomer: ActiveCustomer;
   services: NativeServices;
   platform: IPlatformService;
@@ -36,7 +40,7 @@ export function EnterpriseNativeRoot({
         broadcastService={services.broadcastService}
       >
         <Root
-          key={activeCustomer.id}
+          key={runtimeKey}
           services={services}
           platform={platform}
           initialWorkspaceAbsPath={activeCustomer.workspacePath}

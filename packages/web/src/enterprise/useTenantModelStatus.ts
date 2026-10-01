@@ -1,27 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
-import { createEnterpriseClient, type ModelCredentialStatus } from "./api.js";
+import { createEnterpriseClient, type ModelProviderView } from "./api.js";
 
 const api = createEnterpriseClient();
 
+/**
+ * 模型就绪判定基于供应商目录:列表中存在 enabled 的供应商即视为就绪,
+ * 供 EnterpriseApp 的 modelReady 门控使用(旧的单凭据状态接口已随目录方案下线)。
+ */
 export function useTenantModelStatus(
   userId: string | undefined,
   tenantId: string,
   setError: (message: string) => void,
 ) {
-  const [statuses, setStatuses] = useState<ModelCredentialStatus[]>([]);
+  const [providers, setProviders] = useState<ModelProviderView[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!userId || !tenantId) {
-      setStatuses([]);
+      setProviders([]);
       setLoaded(false);
       return;
     }
     try {
-      setStatuses(await api.modelCredentials(tenantId));
+      setProviders(await api.modelProviders(tenantId));
       setLoaded(true);
     } catch (cause) {
-      setStatuses([]);
+      setProviders([]);
       setLoaded(true);
       setError(String(cause));
     }
@@ -31,18 +35,18 @@ export function useTenantModelStatus(
     let stale = false;
     setLoaded(false);
     if (!userId || !tenantId) {
-      setStatuses([]);
+      setProviders([]);
       return;
     }
-    void api.modelCredentials(tenantId).then(
+    void api.modelProviders(tenantId).then(
       (next) => {
         if (stale) return;
-        setStatuses(next);
+        setProviders(next);
         setLoaded(true);
       },
       (cause: unknown) => {
         if (stale) return;
-        setStatuses([]);
+        setProviders([]);
         setLoaded(true);
         setError(String(cause));
       },
@@ -53,7 +57,7 @@ export function useTenantModelStatus(
   }, [userId, tenantId, setError]);
 
   return {
-    modelReady: statuses.some((status) => status.providerFamily === "custom" && status.configured),
+    modelReady: providers.some((provider) => provider.enabled),
     modelStatusLoaded: loaded,
     refresh,
   };

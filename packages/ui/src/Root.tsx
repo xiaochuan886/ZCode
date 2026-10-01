@@ -10,6 +10,7 @@ import {
 import { TooltipProvider } from "@/components/ui/tooltip.js";
 import { Button } from "@/components/ui/button.js";
 import { PlatformProvider } from "@/hooks/usePlatform.js";
+import { subscribeEnterpriseWorkspaceOpen } from "@/enterprise/enterpriseWorkspaceBridge.js";
 import { ServiceProvider } from "@/hooks/useServices.js";
 import { useDynamicWorkflowAvailabilityLoader } from "@/hooks/useDynamicWorkflowAvailability.js";
 import { DirectoryBrowser } from "@/DirectoryBrowser.js";
@@ -970,6 +971,15 @@ function RootInner({
     enterpriseContext,
     enterpriseManagedModel,
   };
+
+  useEffect(() => {
+    // 企业桥:客户行点击 → 当前专家 runtime 内打开该客户工作区(原生 addTab 路径)。
+    // 普通模式不订阅,零开销;这也避免为该动作扩展 Root 的 props 面。
+    if (!enterpriseContext) return;
+    return subscribeEnterpriseWorkspaceOpen((workspacePath) => {
+      void handleSelectProject(workspacePath);
+    });
+  }, [enterpriseContext, handleSelectProject]);
 
   if (isStartupRenderBlocked) {
     const loadingLabel = intl.formatMessage({ id: "common.loading" });

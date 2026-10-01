@@ -833,7 +833,7 @@ const zhCN: Record<string, string> = {
   "logout.confirm.cancel": "取消",
   "sidebar.profile.notLoggedIn": "连接使用",
   "enterprise.customer": "客户",
-  "enterprise.customerWorkspaces": "客户工作区",
+  "enterprise.customerWorkspaces": "企业设置",
   "enterprise.switchCustomer": "切换客户",
   "enterprise.switchTenant": "切换租户",
   "enterprise.modelSettings": "模型设置",

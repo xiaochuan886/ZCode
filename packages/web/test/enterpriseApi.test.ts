@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  createEnterpriseClient,
-  isCompleteCustomerDraft,
-  isCompleteModelCredentialInput,
-} from "../src/enterprise/api.ts";
+import { createEnterpriseClient, isCompleteCustomerDraft } from "../src/enterprise/api.ts";
 
 test("customer creation requires a tenant and customer name", () => {
   assert.equal(isCompleteCustomerDraft({ tenantId: "tenant-1", name: "" }), false);
@@ -86,39 +82,7 @@ test("bootstrap exposes the active customer", async () => {
   });
 });
 
-test("custom provider credentials require all connection fields", () => {
-  assert.equal(
-    isCompleteModelCredentialInput({
-      providerName: "OpenAI",
-      apiType: "openai-chat-completions",
-      baseUrl: "https://api.openai.com/v1",
-      modelId: "gpt-4o",
-      apiKey: "key-1",
-    }),
-    true,
-  );
-  assert.equal(
-    isCompleteModelCredentialInput({
-      providerName: "OpenAI",
-      apiType: "openai-chat-completions",
-      baseUrl: "",
-      modelId: "gpt-4o",
-      apiKey: "key-1",
-    }),
-    false,
-  );
-  assert.equal(
-    isCompleteModelCredentialInput({
-      apiType: "openai-chat-completions",
-      baseUrl: "https://api.openai.com/v1",
-      modelId: "gpt-4o",
-      apiKey: "key-1",
-    }),
-    true,
-  );
-});
-
-test("tenant model settings send the generic custom provider payload", async () => {
+test("model provider creation sends the tenant scoped catalog payload", async () => {
   let sent: { url: string; body: unknown; csrf: string | null } | undefined;
   const client = createEnterpriseClient(async (url, init) => {
     sent = {
@@ -126,72 +90,142 @@ test("tenant model settings send the generic custom provider payload", async () 
       body: JSON.parse(String(init?.body)),
       csrf: new Headers(init?.headers).get("X-CSRF-Token"),
     };
-    return new Response("{}", { status: 200 });
+    return new Response("{}", { status: 201 });
   });
-  await client.saveModelCredential(
+  await client.createModelProvider(
     "tenant-1",
     {
-      providerName: "OpenAI",
+      providerKey: "openai",
+      displayName: "OpenAI",
       apiType: "openai-chat-completions",
       baseUrl: "https://api.openai.com/v1",
-      modelId: "gpt-4o",
       apiKey: "key-1",
+      models: ["gpt-4o", "gpt-4o-mini"],
+      defaultModel: "gpt-4o",
+      isDefault: true,
     },
     "csrf-1",
   );
   assert.deepEqual(sent, {
-    url: "/api/enterprise/tenants/tenant-1/model-credentials/custom",
+    url: "/api/enterprise/tenants/tenant-1/model-providers",
     body: {
-      providerName: "OpenAI",
+      providerKey: "openai",
+      displayName: "OpenAI",
       apiType: "openai-chat-completions",
       baseUrl: "https://api.openai.com/v1",
-      modelId: "gpt-4o",
       apiKey: "key-1",
+      models: ["gpt-4o", "gpt-4o-mini"],
+      defaultModel: "gpt-4o",
+      isDefault: true,
     },
     csrf: "csrf-1",
   });
 });
 
-test("custom provider payload allows the server default provider name", async () => {
-  let body: unknown;
-  const client = createEnterpriseClient(async (_url, init) => {
-    body = JSON.parse(String(init?.body));
-    return new Response("{}", { status: 200 });
-  });
-  await client.saveModelCredential(
-    "tenant-1",
-    {
-      apiType: "anthropic-messages",
-      baseUrl: "https://api.example.com/v1",
-      modelId: "claude-3-5-sonnet",
-      apiKey: "key-1",
-    },
-    "csrf-1",
-  );
-  assert.deepEqual(body, {
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.example.com/v1",
-    modelId: "claude-3-5-sonnet",
-    apiKey: "key-1",
-  });
-});
-
-test("revoking the custom provider uses the tenant route and CSRF", async () => {
-  let sent: { url: string; method: string | undefined; csrf: string | null } | undefined;
+test("model provider mutations use the id scoped routes", async () => {
+  const calls: { url: string; method: string | undefined; body: unknown; csrf: string | null }[] =
+    [];
   const client = createEnterpriseClient(async (url, init) => {
-    sent = {
+    calls.push({
       url: String(url),
       method: init?.method,
+      body: init?.body ? JSON.parse(String(init?.body)) : null,
       csrf: new Headers(init?.headers).get("X-CSRF-Token"),
-    };
+    });
     return new Response("{}", { status: 200 });
   });
-  await client.revokeModelCredential("tenant-1", "csrf-1");
-  assert.deepEqual(sent, {
-    url: "/api/enterprise/tenants/tenant-1/model-credentials/custom",
-    method: "DELETE",
-    csrf: "csrf-1",
+  await client.updateModelProvider("provider-1", { isDefault: true }, "csrf-1");
+  await client.testModelProvider("provider-1", "csrf-1");
+  await client.deleteModelProvider("provider-1", "csrf-1");
+  assert.deepEqual(calls, [
+    {
+      url: "/api/enterprise/model-providers/provider-1",
+      method: "PATCH",
+      body: { isDefault: true },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/model-providers/provider-1/test",
+      method: "POST",
+      body: {},
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/model-providers/provider-1",
+      method: "DELETE",
+      body: null,
+      csrf: "csrf-1",
+    },
+  ]);
+});
+
+test("connector and skill import mutations hit their tenant and id routes", async () => {
+  const calls: { url: string; method: string | undefined; body: unknown; csrf: string | null }[] =
+    [];
+  const client = createEnterpriseClient(async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method,
+      body: init?.body ? JSON.parse(String(init?.body)) : null,
+      csrf: new Headers(init?.headers).get("X-CSRF-Token"),
+    });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
   });
+  await client.createMcpConnector(
+    "tenant-1",
+    {
+      connectorKey: "docs",
+      displayName: "Docs",
+      url: "https://mcp.example.com",
+      secretEnv: "ZCODE_ENTERPRISE_MCP_SECRET_TENANT1_DOCS",
+    },
+    "csrf-1",
+  );
+  await client.updateMcpConnector("connector-1", { enabled: false }, "csrf-1");
+  await client.deleteMcpConnector("connector-1", "csrf-1");
+  await client.importableSkills("tenant-1");
+  await client.importTenantSkill(
+    "tenant-1",
+    { name: "my-skill", origin: "workspace", workspaceId: "customer-1" },
+    "csrf-1",
+  );
+  assert.deepEqual(calls, [
+    {
+      url: "/api/enterprise/tenants/tenant-1/mcp-connectors",
+      method: "POST",
+      body: {
+        connectorKey: "docs",
+        displayName: "Docs",
+        url: "https://mcp.example.com",
+        secretEnv: "ZCODE_ENTERPRISE_MCP_SECRET_TENANT1_DOCS",
+      },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/mcp-connectors/connector-1",
+      method: "PATCH",
+      body: { enabled: false },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/mcp-connectors/connector-1",
+      method: "DELETE",
+      body: null,
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/importable-skills",
+      method: undefined,
+      body: null,
+      csrf: null,
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/skills/import",
+      method: "POST",
+      body: { name: "my-skill", origin: "workspace", workspaceId: "customer-1" },
+      csrf: "csrf-1",
+    },
+  ]);
 });
 
 test("ordinary server is identified only by a missing enterprise route", async () => {

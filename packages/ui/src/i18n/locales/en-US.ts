@@ -914,7 +914,7 @@ const enUS: Record<string, string> = {
   "logout.confirm.cancel": "Cancel",
   "sidebar.profile.notLoggedIn": "Connect",
   "enterprise.customer": "Customer",
-  "enterprise.customerWorkspaces": "Customer workspaces",
+  "enterprise.customerWorkspaces": "Enterprise settings",
   "enterprise.switchCustomer": "Switch customer",
   "enterprise.switchTenant": "Switch tenant",
   "enterprise.modelSettings": "Model settings",

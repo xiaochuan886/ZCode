@@ -1,7 +1,12 @@
-import { mkdir, lstat, rmdir } from "node:fs/promises";
+import { mkdir, lstat, rmdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { EnterpriseError, type Customer, type EnterpriseRuntimeTarget } from "./types.js";
+import {
+  EnterpriseError,
+  expertRuntimeId,
+  type Customer,
+  type EnterpriseRuntimeTarget,
+} from "./types.js";
 import { EnterpriseStoreBase, type Row, now, id, json } from "./store-base.js";
 
 export class CustomerStoreSupport extends EnterpriseStoreBase {
@@ -131,15 +136,69 @@ export class CustomerStoreSupport extends EnterpriseStoreBase {
     return this.customerRow(actorId, customerId);
   }
 
+  /** 管理员删除客户:行级联删除 Skill/绑定与令牌,返回工作区路径供网关清理目录。 */
+  deleteCustomer(actorId: string, customerId: string): { workspacePath: string } {
+    const customer = this.customerRow(actorId, customerId);
+    this.transaction(() => {
+      this.run(
+        "UPDATE sessions SET active_customer_id=NULL WHERE active_customer_id=?",
+        customer.id,
+      );
+      this.run("DELETE FROM customers WHERE id=?", customer.id);
+    });
+    return { workspacePath: customer.workspacePath };
+  }
+
+  /**
+   * 客户物化时重写最小 AGENTS.md。企业层管理此文件；用户对生成文件的编辑
+   * 会在下一次物化被覆盖（产品文案中已声明）。
+   */
+  async writeCustomerAgentsFile(customer: Customer): Promise<void> {
+    const content = `# ${customer.name}
+
+此工作区由企业网关管理（租户客户：${customer.name}${customer.type ? `，类型：${customer.type}` : ""}）。
+会话、任务与文件由 ZCode 原生界面负责；本文件由企业管理面在客户变更时重写。
+`;
+    await this.ensureDirectory(customer.workspacePath);
+    await writeFile(join(customer.workspacePath, "AGENTS.md"), content, {
+      encoding: "utf8",
+      mode: 0o644,
+    });
+  }
+
   getCustomerRuntimeTarget(actorId: string, customerId: string): EnterpriseRuntimeTarget {
     const customer = this.customerRow(actorId, customerId);
+    // runtime 属于专家(用户×租户),不属于客户;客户只是其中挂载的一个工作区。
     return {
-      id: customer.id,
+      id: expertRuntimeId(actorId, customer.tenantId),
       tenantId: customer.tenantId,
-      customerId: customer.id,
+      userId: actorId,
       workspacePath: customer.workspacePath,
-      runtimeId: customer.id,
-      kind: "customer",
+      runtimeId: expertRuntimeId(actorId, customer.tenantId),
+      kind: "expert",
     };
+  }
+
+  /** 租户下全部成员的专家 runtime 目标;用于凭据/Skill/客户变更时停止受影响 runtime。 */
+  expertRuntimeTargetsForTenant(actorId: string, tenantId: string): EnterpriseRuntimeTarget[] {
+    this.membership(actorId, tenantId);
+    return this.all(
+      "SELECT user_id FROM memberships WHERE tenant_id=? ORDER BY user_id",
+      tenantId,
+    ).map((row) => {
+      const userId = String(row.user_id);
+      const firstCustomer = this.one(
+        "SELECT workspace_path FROM customers WHERE tenant_id=? ORDER BY created_at,id LIMIT 1",
+        tenantId,
+      );
+      return {
+        id: expertRuntimeId(userId, tenantId),
+        tenantId,
+        userId,
+        workspacePath: firstCustomer ? String(firstCustomer.workspace_path) : "",
+        runtimeId: expertRuntimeId(userId, tenantId),
+        kind: "expert",
+      } satisfies EnterpriseRuntimeTarget;
+    });
   }
 }

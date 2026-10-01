@@ -48,9 +48,11 @@ async function ensureRealDirectory(path: string): Promise<void> {
   }
 }
 
-async function readRegularFile(path: string): Promise<string> {
+/** Read a regular file without following symlinks; shared with the personal-Skill import. */
+export async function readRegularFile(path: string): Promise<string> {
   const info = await lstat(path);
-  if (!info.isFile() || info.isSymbolicLink()) throw new Error("Managed Customer file must be regular");
+  if (!info.isFile() || info.isSymbolicLink())
+    throw new Error("Managed Customer file must be regular");
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     if (!(await handle.stat()).isFile()) throw new Error("Managed Customer file must be regular");
@@ -61,8 +63,7 @@ async function readRegularFile(path: string): Promise<string> {
 }
 
 function validateInput(input: WorkspaceMaterializeInput): void {
-  if (!isAbsolute(input.workspacePath))
-    throw new Error("Customer workspace path must be absolute");
+  if (!isAbsolute(input.workspacePath)) throw new Error("Customer workspace path must be absolute");
   for (const skill of input.sharedSkills ?? []) {
     if (!SAFE_NAME.test(skill.id)) throw new Error("Invalid shared Skill ID");
     if (skill.sha256 && createHash("sha256").update(skill.content).digest("hex") !== skill.sha256) {

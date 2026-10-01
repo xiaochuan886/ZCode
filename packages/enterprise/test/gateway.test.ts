@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { once } from "node:events";
 import {
   createServer as createHttpServer,
   request as httpRequest,
@@ -7,15 +8,18 @@ import {
 } from "node:http";
 import { createConnection, type AddressInfo, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
+import { expertRuntimeId } from "../src/types.js";
 import { nativePathAllowed, nativeTarget } from "../src/proxy.js";
 import { EnterpriseStore } from "../src/store.js";
 import { EnterpriseAuth } from "../src/auth.js";
 import { RuntimeManager } from "../src/runtime.js";
 import { createEnterpriseGateway } from "../src/gateway.js";
+import { materializeCustomer } from "../src/gateway-prepare.js";
 
 const password = "correct horse battery staple";
 type BrowserSession = { cookie: string; csrf: string };
@@ -264,9 +268,15 @@ test("admins provision users atomically and customer updates stay tenant-scoped"
       name: "Member rename",
     });
     assert.equal(response.status, 403);
-    response = await api(base, foreignSession, `/api/enterprise/customers/${customer.id}`, "PATCH", {
-      name: "Cross tenant",
-    });
+    response = await api(
+      base,
+      foreignSession,
+      `/api/enterprise/customers/${customer.id}`,
+      "PATCH",
+      {
+        name: "Cross tenant",
+      },
+    );
     assert.equal(response.status, 404);
     response = await api(
       base,
@@ -290,8 +300,8 @@ test("admins provision users atomically and customer updates stay tenant-scoped"
   }
 });
 
-test("tenant model API accepts one custom connection and never returns its key", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-model-"));
+test("tenant model provider catalog API is admin-gated and never returns keys", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-providers-"));
   await writeFile(join(dir, "index.html"), "ready");
   const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"), {
     modelCredentialsEncryptionKey: Buffer.alloc(32, 0x42),
@@ -303,12 +313,23 @@ test("tenant model API accepts one custom connection and never returns its key",
     passwordHash: hash,
     role: "member",
   });
+  let testedUrl = "";
+  let testedHeaders: Record<string, string> = {};
+  const fetchImpl: typeof fetch = async (input, init) => {
+    testedUrl = String(input);
+    testedHeaders = (init?.headers ?? {}) as Record<string, string>;
+    return new Response(JSON.stringify({ data: [{ id: "listed-model" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
   const gateway = createEnterpriseGateway({
     store,
     auth: new EnterpriseAuth(store),
     runtimes: managerFor("http://127.0.0.1:9"),
     staticRoot: dir,
     port: 0,
+    fetchImpl,
   });
   await gateway.listen();
   const address = gateway.server.address() as AddressInfo;
@@ -319,73 +340,147 @@ test("tenant model API accepts one custom connection and never returns its key",
     let response = await api(
       base,
       adminSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials`,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
       "GET",
     );
+    assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), []);
-    response = await api(
-      base,
-      adminSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
-      "PUT",
-      {
-        providerName: "Acme AI",
-        apiType: "openai-chat-completions",
-        baseUrl: "https://api.example.com/v1",
-        modelId: "acme-model",
-        apiKey: "server-secret-1234",
-      },
-    );
-    assert.equal(response.status, 200);
-    const saved = (await response.json()) as Record<string, unknown>;
-    assert.equal(saved.providerName, "Acme AI");
-    assert.equal(saved.modelId, "acme-model");
-    assert.equal("apiKey" in saved, false);
+    // 成员创建被拒。
     response = await api(
       base,
       memberSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials`,
-      "GET",
-    );
-    assert.equal(response.status, 200);
-    const memberStatus = (await response.json()) as Array<Record<string, unknown>>;
-    assert.equal(memberStatus[0]?.configured, true);
-    assert.equal("apiKey" in (memberStatus[0] ?? {}), false);
-    response = await api(
-      base,
-      memberSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
-      "PUT",
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
       {
-        providerName: "Denied",
-        apiType: "openai-chat-completions",
-        baseUrl: "https://api.example.com/v1",
-        modelId: "denied",
-        apiKey: "member-secret",
+        providerKey: "denied",
+        displayName: "Denied",
+        apiType: "anthropic-messages",
+        baseUrl: "https://denied.example.com",
+        apiKey: "member-secret-9999",
       },
     );
     assert.equal(response.status, 403);
     response = await api(
       base,
       adminSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials/zai-api`,
-      "PUT",
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
       {
-        apiType: "anthropic-messages",
-        baseUrl: "https://api.example.com",
-        modelId: "zai-hidden",
-        apiKey: "hidden-secret",
+        providerKey: "acme",
+        displayName: "Acme AI",
+        apiType: "openai-chat-completions",
+        baseUrl: "https://acme.example.com/v1",
+        apiKey: "server-secret-1234",
+        models: ["acme-a", "acme-b"],
       },
     );
-    assert.equal(response.status, 404);
+    assert.equal(response.status, 201);
+    const first = (await response.json()) as Record<string, unknown>;
+    assert.equal(first.providerKey, "acme");
+    assert.equal(first.isDefault, true);
+    assert.equal(first.apiKeyLast4, "1234");
+    assert.equal("apiKey" in first, false);
     response = await api(
       base,
       adminSession,
-      `/api/enterprise/tenants/${tenant.id}/model-credentials/custom`,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
+      {
+        providerKey: "beta",
+        displayName: "Beta AI",
+        apiType: "anthropic-messages",
+        baseUrl: "https://beta.example.com",
+        apiKey: "beta-key-8888",
+        models: ["beta-a"],
+        isDefault: true,
+      },
+    );
+    assert.equal(response.status, 201);
+    const second = (await response.json()) as Record<string, unknown>;
+    // 成员可读投影,无 key。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const memberView = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(memberView.length, 2);
+    assert.deepEqual(
+      memberView.map((provider) => [provider.providerKey, provider.isDefault]),
+      [
+        ["acme", false],
+        ["beta", true],
+      ],
+    );
+    assert.ok(memberView.every((provider) => !("apiKey" in provider)));
+    // PATCH 切默认。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/model-providers/${first.id}`,
+      "PATCH",
+      {
+        isDefault: true,
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { isDefault: boolean }).isDefault, true);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/model-providers/${first.id}`,
+      "PATCH",
+      {
+        displayName: "Denied",
+      },
+    );
+    assert.equal(response.status, 403);
+    // 连接测试走服务端 fetch:openai 类型带 Bearer 头,key 不出现在响应中。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/model-providers/${first.id}/test`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    const testResult = (await response.json()) as { ok: boolean; models?: string[] };
+    assert.equal(testResult.ok, true);
+    assert.deepEqual(testResult.models, ["listed-model"]);
+    assert.equal(testedUrl, "https://acme.example.com/v1/models");
+    assert.equal(testedHeaders.authorization, "Bearer server-secret-1234");
+    assert.equal(JSON.stringify(testResult).includes("server-secret-1234"), false);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/model-providers/${first.id}/test`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 403);
+    // DELETE。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/model-providers/${second.id}`,
       "DELETE",
     );
     assert.equal(response.status, 200);
-    assert.equal(((await response.json()) as { configured: boolean }).configured, false);
+    assert.deepEqual(await response.json(), { ok: true });
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "GET",
+    );
+    const afterDelete = (await response.json()) as Array<Record<string, unknown>>;
+    assert.deepEqual(
+      afterDelete.map((provider) => provider.providerKey),
+      ["acme"],
+    );
+    assert.equal(afterDelete[0]!.isDefault, true);
   } finally {
     await gateway.close();
     store.close();
@@ -456,50 +551,20 @@ test("customer routes activate one stable workspace per customer", async () => {
     });
     assert.equal(response.status, 200);
     assert.equal(((await response.json()) as { type: string }).type, "");
-    response = await api(
-      base,
-      browser,
-      `/api/enterprise/customers/${created.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(response.status, 200);
-    assert.equal(starts, 1);
+    // 专家模型:激活只是记账,任何激活都不触发 runtime 启停;切换客户
+    // 由原生工作区 tab 完成,runtime 在首个原生请求时才 ensure。
+    for (const target of [created.id, created.id, customer.id, created.id]) {
+      response = await api(
+        base,
+        browser,
+        `/api/enterprise/customers/${target}/activate`,
+        "POST",
+        {},
+      );
+      assert.equal(response.status, 200);
+    }
+    assert.equal(starts, 0);
     assert.equal(stops, 0);
-    // Repeating the same activation must retain the healthy Customer runtime
-    // and any native sessions attached to it.
-    response = await api(
-      base,
-      browser,
-      `/api/enterprise/customers/${created.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(response.status, 200);
-    assert.equal(starts, 1);
-    assert.equal(stops, 0);
-    // Switching targets still runs the target preparation path. Switching
-    // back to the already-running Customer proves that path can replace it.
-    response = await api(
-      base,
-      browser,
-      `/api/enterprise/customers/${customer.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(response.status, 200);
-    assert.equal(starts, 2);
-    assert.equal(stops, 0);
-    response = await api(
-      base,
-      browser,
-      `/api/enterprise/customers/${created.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(response.status, 200);
-    assert.equal(starts, 3);
-    assert.equal(stops, 1);
     response = await fetch(`${base}/api/enterprise/bootstrap`, {
       headers: { cookie: browser.cookie },
     });
@@ -666,7 +731,6 @@ test("MCP relay streams through one Customer binding without writing the upstrea
   const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-mcp-"));
   await writeFile(join(dir, "index.html"), "ready");
   const secret = "never-write-this-real-secret";
-  let runtimeToken = "";
   let fetchCount = 0;
   let upstreamAuthorization: string | undefined;
   let upstreamSession: string | undefined;
@@ -722,9 +786,7 @@ test("MCP relay streams through one Customer binding without writing the upstrea
   const gateway = createEnterpriseGateway({
     store,
     auth: new EnterpriseAuth(store),
-    runtimes: managerFor("http://127.0.0.1:9", (token) => {
-      runtimeToken = token;
-    }),
+    runtimes: managerFor("http://127.0.0.1:9"),
     staticRoot: dir,
     port: 0,
     fetchImpl,
@@ -734,16 +796,10 @@ test("MCP relay streams through one Customer binding without writing the upstrea
   const address = gateway.server.address() as AddressInfo;
   const base = `http://127.0.0.1:${address.port}`;
   try {
-    const browser = await login(base, "admin@example.test");
-    const activated = await api(
-      base,
-      browser,
-      `/api/enterprise/customers/${value.id}/activate`,
-      "POST",
-      {},
-    );
-    assert.equal(activated.status, 200);
-    assert.ok(runtimeToken);
+    await login(base, "admin@example.test");
+    // 专家模型:工作区物化发生在 CRUD(这里直接调用与路由等价的实现),
+    // 激活不再触发任何 runtime/物化动作。
+    await materializeCustomer(value, store, user.id, base);
 
     const configPath = join(value.workspacePath, ".zcode", "config.json");
     const config = await readFile(configPath, "utf8");
@@ -817,5 +873,494 @@ test("MCP relay streams through one Customer binding without writing the upstrea
     else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
     await gateway.close();
     store.close();
+  }
+});
+
+test("tenant connector API is admin-gated and relays with a stable token", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-connectors-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const secret = "connector-upstream-secret";
+  let fetchCount = 0;
+  let upstreamAuthorization: string | undefined;
+  let upstreamApiKeyHeader: string | undefined;
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    fetchCount += 1;
+    const headers = init?.headers as Record<string, string>;
+    upstreamAuthorization = headers.authorization;
+    upstreamApiKeyHeader = headers["x-api-key"];
+    return new Response('event: message\ndata: {"ok":true}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "connector-admin@example.test", hash);
+  const member = store.provisionUser(user.id, tenant.id, {
+    email: "connector-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const secretEnv = `ZCODE_ENTERPRISE_MCP_SECRET_${tenant.id.replaceAll("-", "").toUpperCase()}_GATEWAY`;
+  const priorSecret = process.env[secretEnv];
+  const priorAllowlist = process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+  process.env[secretEnv] = secret;
+  process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
+    [tenant.id]: ["https://system-mcp.example.test"],
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+    fetchImpl,
+    mcpDnsLookup: async () => [{ address: "1.1.1.1", family: 4 }],
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const adminSession = await login(base, user.email);
+    const memberSession = await login(base, member.user.email);
+    let response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "denied",
+        displayName: "Denied",
+        url: "https://system-mcp.example.test/mcp",
+        secretEnv,
+      },
+    );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "search",
+        displayName: "Search connector",
+        url: "https://system-mcp.example.test/mcp",
+        secretEnv,
+      },
+    );
+    assert.equal(response.status, 201);
+    const connector = (await response.json()) as {
+      id: string;
+      endpointHost: string;
+      secretConfigured: boolean;
+    };
+    assert.equal(connector.endpointHost, "system-mcp.example.test");
+    assert.equal(connector.secretConfigured, true);
+    // 非 allowlist endpoint 与非租户前缀 secret 引用被拒。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "outside",
+        displayName: "Outside",
+        url: "https://outside.example.test/mcp",
+        secretEnv,
+      },
+    );
+    assert.equal(response.status, 400);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "badsecret",
+        displayName: "Bad secret",
+        url: "https://system-mcp.example.test/mcp",
+        secretEnv: "ZCODE_ENTERPRISE_MCP_SECRET_OTHER_NAME",
+      },
+    );
+    assert.equal(response.status, 400);
+    // 成员可读状态投影,不含 token/secret。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const memberView = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(memberView.length, 1);
+    assert.equal(JSON.stringify(memberView).includes(secret), false);
+    assert.equal("token" in (memberView[0] ?? {}), false);
+
+    const token = store.ensureMcpConnectorToken(connector.id);
+    const relayPath = `/api/enterprise/mcp-relay/t/${connector.id}`;
+    let relayResponse = await fetch(`${base}${relayPath}`, {
+      method: "POST",
+      headers: { authorization: "Bearer wrong-token-value-aaaaaaaaaaaaaaaaaaaa" },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 401);
+    assert.equal(fetchCount, 0);
+    relayResponse = await fetch(`${base}${relayPath}`, {
+      method: "POST",
+      headers: { authorization: "Bearer totally-wrong-token-aaaaaaaaaaaaaaaaa" },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 401);
+    relayResponse = await fetch(`${base}${relayPath}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.match(await relayResponse.text(), /event: message/);
+    assert.equal(fetchCount, 1);
+    assert.equal(upstreamAuthorization, `Bearer ${secret}`);
+
+    // 自定义上游头名:注入到指定头而不是 Authorization。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/mcp-connectors/${connector.id}`,
+      "PATCH",
+      {
+        headerName: "x-api-key",
+      },
+    );
+    assert.equal(response.status, 200);
+    assert.equal(((await response.json()) as { headerName: string }).headerName, "x-api-key");
+    relayResponse = await fetch(`${base}${relayPath}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.equal(upstreamApiKeyHeader, `Bearer ${secret}`);
+    assert.equal(upstreamAuthorization, undefined);
+
+    // 停用后中继立即拒绝。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/mcp-connectors/${connector.id}`,
+      "PATCH",
+      {
+        enabled: false,
+      },
+    );
+    assert.equal(response.status, 200);
+    relayResponse = await fetch(`${base}${relayPath}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 401);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/mcp-connectors/${connector.id}`,
+      "DELETE",
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+  } finally {
+    if (priorSecret === undefined) delete process.env[secretEnv];
+    else process.env[secretEnv] = priorSecret;
+    if (priorAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+    else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
+    await gateway.close();
+    store.close();
+  }
+});
+
+test("admins import a personal skill from their expert runtime home", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-skill-import-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const runtimeDataRoot = join(dir, "runtime-data");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "skill-admin@example.test", hash);
+  const member = store.provisionUser(user.id, tenant.id, {
+    email: "skill-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const skillHome = join(runtimeDataRoot, expertRuntimeId(user.id, tenant.id), ".zcode", "skills");
+  await mkdir(join(skillHome, "my-playbook"), { recursive: true });
+  await writeFile(join(skillHome, "my-playbook", "SKILL.md"), "# My playbook\n");
+  await mkdir(join(skillHome, "nested", "deep-skill"), { recursive: true });
+  await writeFile(join(skillHome, "nested", "deep-skill", "SKILL.md"), "# Nested\n");
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+    modelRuntimeDataRoot: runtimeDataRoot,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const adminSession = await login(base, user.email);
+    const memberSession = await login(base, member.user.email);
+    let response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "my-playbook", origin: "home" },
+    );
+    assert.equal(response.status, 403);
+    // 目录穿越与非法名一律 400;缺失的 Skill 404;非法 origin 400。
+    for (const name of ["../acme", "/etc/passwd", "My Playbook", "a//b", "."]) {
+      response = await api(
+        base,
+        adminSession,
+        `/api/enterprise/tenants/${tenant.id}/skills/import`,
+        "POST",
+        { name, origin: "home" },
+      );
+      assert.equal(response.status, 400, name);
+    }
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "my-playbook", origin: "bogus" },
+    );
+    assert.equal(response.status, 400);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "missing-skill", origin: "home" },
+    );
+    assert.equal(response.status, 404);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "my-playbook", origin: "home" },
+    );
+    assert.equal(response.status, 201);
+    const imported = (await response.json()) as {
+      ok: boolean;
+      skill: { id: string; name: string };
+    };
+    assert.equal(imported.ok, true);
+    assert.equal(imported.skill.name, "my-playbook");
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "nested/deep-skill", origin: "home" },
+    );
+    assert.equal(response.status, 201);
+    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/skills`, "GET");
+    const skills = (
+      (await response.json()) as { items: Array<{ id: string; name: string; content: string }> }
+    ).items;
+    assert.deepEqual(skills.map((skill) => skill.name).sort(), [
+      "my-playbook",
+      "nested/deep-skill",
+    ]);
+    assert.equal(skills.find((skill) => skill.name === "my-playbook")!.content, "# My playbook\n");
+    // 成员不可导入,导入产生的内容成员可读。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "nested/deep-skill", origin: "home" },
+    );
+    assert.equal(response.status, 403);
+  } finally {
+    await gateway.close();
+    store.close();
+  }
+});
+
+test("importable skill listing covers expert home and customer workspaces", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-skill-listing-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const runtimeDataRoot = join(dir, "runtime-data");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "skill-list@example.test", hash);
+  const member = store.provisionUser(user.id, tenant.id, {
+    email: "skill-list-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  // 原生 skill-creator 默认把新 Skill 建在项目级(客户 workspace)。
+  const workspaceAgents = join(customer.workspacePath, ".agents", "skills");
+  await mkdir(join(workspaceAgents, "deploy-helper"), { recursive: true });
+  await writeFile(
+    join(workspaceAgents, "deploy-helper", "SKILL.md"),
+    "---\nname: deploy-helper\ndescription: Deploy runbooks for Acme clusters.\n---\n# Deploy\n",
+  );
+  // 托管前缀目录必须被排除;HOME 的 `.agents` 根也要被扫描。
+  await mkdir(join(customer.workspacePath, ".zcode", "skills", "enterprise-managed"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(customer.workspacePath, ".zcode", "skills", "enterprise-managed", "SKILL.md"),
+    "# managed\n",
+  );
+  const homeAgents = join(
+    runtimeDataRoot,
+    expertRuntimeId(user.id, tenant.id),
+    ".agents",
+    "skills",
+  );
+  await mkdir(join(homeAgents, "personal-thing"), { recursive: true });
+  await writeFile(
+    join(homeAgents, "personal-thing", "SKILL.md"),
+    "---\nname: personal-thing\ndescription: Personal helper kept in HOME.\n---\n# Helper\n",
+  );
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+    modelRuntimeDataRoot: runtimeDataRoot,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  type Importable = {
+    name: string;
+    description: string;
+    origin: string;
+    workspaceId: string | null;
+    workspaceName: string | null;
+    alreadyImported: boolean;
+  };
+  try {
+    const adminSession = await login(base, user.email);
+    const memberSession = await login(base, member.user.email);
+    let response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/importable-skills`,
+      "GET",
+    );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/importable-skills`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const listing = (await response.json()) as Importable[];
+    assert.deepEqual(listing.map((item) => [item.name, item.origin, item.workspaceName]).sort(), [
+      ["deploy-helper", "workspace", "Acme"],
+      ["personal-thing", "home", null],
+    ]);
+    assert.equal(
+      listing.find((item) => item.name === "deploy-helper")!.description,
+      "Deploy runbooks for Acme clusters.",
+    );
+    // 工作区来源必须带 workspaceId 才能命中;导入后清单翻转为已导入。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "deploy-helper", origin: "workspace" },
+    );
+    assert.equal(response.status, 404);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "deploy-helper", origin: "workspace", workspaceId: customer.id },
+    );
+    assert.equal(response.status, 201);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/importable-skills`,
+      "GET",
+    );
+    const refreshed = (await response.json()) as Importable[];
+    assert.equal(refreshed.find((item) => item.name === "deploy-helper")!.alreadyImported, true);
+    assert.equal(refreshed.find((item) => item.name === "personal-thing")!.alreadyImported, false);
+  } finally {
+    await gateway.close();
+    store.close();
+  }
+});
+
+test("tenant runtime stops destroy the session socket instead of leaving it half-open", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-socket-close-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "socket-close@example.test", hash);
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  // 代理需要一个真实 ws 目标才能完成升级握手。
+  const runtimeTarget = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await once(runtimeTarget, "listening");
+  const runtimePort = (runtimeTarget.address() as AddressInfo).port;
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor(`http://127.0.0.1:${runtimePort}`),
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await login(base, user.email);
+    const activated = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${customer.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(activated.status, 200);
+    const socket = new NodeWebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { Cookie: browser.cookie, Origin: base },
+    });
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await once(socket, "open");
+    // 客户 CRUD 停掉租户 runtime:指向它的会话 socket 必须被同步销毁。
+    // 半开 socket 上的 RPC 永远无响应,正是"技能面板停在搜索中"的根因。
+    const created = await api(base, browser, "/api/enterprise/customers", "POST", {
+      tenantId: tenant.id,
+      name: "Beta",
+    });
+    assert.equal(created.status, 201);
+    await Promise.race([
+      closed,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("session socket was not closed")), 5_000),
+      ),
+    ]);
+    socket.close();
+  } finally {
+    await new Promise<void>((resolve) => {
+      runtimeTarget.close(() => resolve());
+    });
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });

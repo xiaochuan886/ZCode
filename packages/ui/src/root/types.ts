@@ -23,6 +23,8 @@ export interface EnterpriseTenantSummary {
 export interface EnterpriseCustomerSummary {
   id: string;
   name: string;
+  /** 客户工作区绝对路径;专家模型下点击客户行 = 在当前 runtime 内打开该工作区。 */
+  workspacePath?: string;
 }
 
 export interface EnterpriseRootContext {
@@ -32,7 +34,9 @@ export interface EnterpriseRootContext {
   customers: readonly EnterpriseCustomerSummary[];
   activeCustomerId: string | null;
   onSelectCustomer: (customerId: string) => void | Promise<void>;
-  /** 返回企业客户工作区首页，由 Web 壳层负责导航和鉴权。 */
+  /** 在当前专家 runtime 内把目标客户工作区打开为原生工作区 tab。 */
+  onOpenCustomerWorkspace?: (workspacePath: string) => void | Promise<void>;
+  /** 打开企业管理设置页(客户目录/共享 Skill/模型凭据)，由 Web 壳层负责。 */
   onOpenCustomerHome?: () => void | Promise<void>;
   onSelectTenant?: (tenantId: string) => void | Promise<void>;
   onOpenModelSettings?: () => void | Promise<void>;
