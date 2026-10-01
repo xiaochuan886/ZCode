@@ -209,6 +209,7 @@ export class ProcessRuntimeAdapter implements RuntimeAdapter {
         ...(advertised.length > 1 ? { ZCODE_SERVER_WORKSPACES: advertised.join(":") } : {}),
         ZCODE_SERVER_AUTH_TOKEN: input.token,
         ZCODE_ENTERPRISE_MANAGED_MODEL: "1",
+        ZCODE_ENTERPRISE_MANAGED_CONTENT: "1",
         HOME: dataDir,
         XDG_CONFIG_HOME: join(dataDir, "config"),
         XDG_DATA_HOME: join(dataDir, "data"),
@@ -335,6 +336,8 @@ export class ContainerRuntimeAdapter implements RuntimeAdapter {
       `ZCODE_SERVER_AUTH_TOKEN=${input.token}`,
       "-e",
       "ZCODE_ENTERPRISE_MANAGED_MODEL=1",
+      "-e",
+      "ZCODE_ENTERPRISE_MANAGED_CONTENT=1",
       this.options.image,
     );
     const id = await this.docker(dockerArgs);

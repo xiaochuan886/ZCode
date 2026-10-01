@@ -2,6 +2,7 @@ import { EnterpriseAuth } from "./auth.js";
 import { EnterpriseError } from "./types.js";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import { handleCustomerApiRequest } from "./customer-api.js";
+import { handleConnectorOauthApiRequest } from "./connector-oauth-api.js";
 import { handleTenantCatalogApiRequest } from "./tenant-catalog-api.js";
 
 export async function handleEnterpriseApiRequest(
@@ -35,6 +36,7 @@ export async function handleEnterpriseApiRequest(
       return;
     }
     if (await handleCustomerApiRequest(dependencies, session)) return;
+    if (await handleConnectorOauthApiRequest(dependencies, session)) return;
     if (await handleTenantCatalogApiRequest(dependencies, session)) return;
     const tenantSkills = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/skills$/);
     if (tenantSkills && method === "GET") {

@@ -19,7 +19,7 @@ export async function prepareExpertRuntime(params: {
   const { target, store, runtimeDataRoot, relayOrigin } = params;
   if (!runtimeDataRoot) return;
   const tenantSkills = store.tenantSkillsForDistribution(target.tenantId);
-  const mcpServers = tenantConnectorServers(store, target.tenantId, relayOrigin);
+  const mcpServers = tenantConnectorServers(store, target.tenantId, target.userId, relayOrigin);
   // 专家 HOME 就是物化目标:manifest 落在数据根的 .enterprise-managed 下,
   // 连接器与共享 Skill 走同一套 managed-names 合并,专家个人条目保持原样。
   await prepareCustomerWorkspace({
@@ -45,18 +45,39 @@ export async function prepareExpertRuntime(params: {
 
 /**
  * 启用的系统连接器 → 专家 HOME 的 `mcp.servers` 托管条目:URL 指向网关中继
- * `/api/enterprise/mcp-relay/t/<connectorId>`,令牌按客户绑定的同一方式呈现;
- * 上游 secret 只留在网关环境,由中继在转发时注入。
+ * `/api/enterprise/mcp-relay/t/<connectorId>`。shared 模式按连接器稳定令牌分发;
+ * user-oauth 模式按"当前专家是否持有授权"分发,令牌取自该用户的授权行——
+ * 未授权的专家跳过该条目,连接后下次打开自动补上。
  */
 function tenantConnectorServers(
   store: EnterpriseStore,
   tenantId: string,
+  actingUserId: string,
   relayOrigin: string,
 ): Record<string, Record<string, unknown>> {
   const mcpServers: Record<string, Record<string, unknown>> = {};
   for (const connector of store.tenantMcpConnectorsForDistribution(tenantId)) {
-    if (!includeConnector(connector, tenantId)) continue;
-    const token = store.ensureMcpConnectorToken(connector.id);
+    if (!isTenantMcpEndpointAllowed(tenantId, connector.url)) {
+      process.emitWarning(`MCP connector ${connector.id} skipped: endpoint is not allowlisted.`, {
+        code: "ZCODE_ENTERPRISE_MCP_ENDPOINT_DENIED",
+      });
+      continue;
+    }
+    let token: string;
+    if (connector.authMode === "user-oauth") {
+      const authorization = store.userConnectorAuthorization(connector.id, actingUserId);
+      if (!authorization) {
+        // 未连接是正常状态而非配置故障:单行 info 诊断,不用 emitWarning 打断 operator。
+        console.info(
+          `[enterprise] MCP connector ${connector.connectorKey} skipped: user has not authorized it yet`,
+        );
+        continue;
+      }
+      token = authorization.relayToken;
+    } else {
+      if (!sharedConnectorSecretAvailable(connector, tenantId)) continue;
+      token = store.ensureMcpConnectorToken(connector.id);
+    }
     const relayUrl = new URL(
       `/api/enterprise/mcp-relay/t/${encodeURIComponent(connector.id)}`,
       relayOrigin,
@@ -70,13 +91,11 @@ function tenantConnectorServers(
   return mcpServers;
 }
 
-function includeConnector(connector: TenantMcpConnectorDistribution, tenantId: string): boolean {
-  if (!isTenantMcpEndpointAllowed(tenantId, connector.url)) {
-    process.emitWarning(`MCP connector ${connector.id} skipped: endpoint is not allowlisted.`, {
-      code: "ZCODE_ENTERPRISE_MCP_ENDPOINT_DENIED",
-    });
-    return false;
-  }
+/** shared 连接器的网关 secret 引用三连检:格式、配置、可用性。 */
+function sharedConnectorSecretAvailable(
+  connector: TenantMcpConnectorDistribution,
+  tenantId: string,
+): boolean {
   if (!isTenantMcpSecretRef(connector.secretEnv, tenantId)) {
     process.emitWarning(`MCP connector ${connector.id} skipped: secret reference is invalid.`, {
       code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",

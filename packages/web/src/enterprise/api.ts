@@ -49,6 +49,7 @@ export interface ModelProviderTestResult {
   models?: string[];
   error?: string;
 }
+export type TenantMcpConnectorAuthMode = "shared" | "user-oauth";
 /** Tenant connector (系统连接器) row projection; the relay token and secret stay server-side. */
 export interface TenantMcpConnectorView {
   id: string;
@@ -58,13 +59,25 @@ export interface TenantMcpConnectorView {
   headerName: string;
   secretConfigured: boolean;
   enabled: boolean;
+  authMode: TenantMcpConnectorAuthMode;
+  /** user-oauth 模式下当前用户是否已连接自己的账号;shared 模式恒为 true。 */
+  authorized: boolean;
 }
 export interface TenantMcpConnectorInput {
   connectorKey: string;
   displayName: string;
   url: string;
   headerName?: string;
-  secretEnv: string;
+  /** shared 模式必填;user-oauth 模式禁止。 */
+  secretEnv?: string;
+  authMode?: TenantMcpConnectorAuthMode;
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  clientId?: string;
+  /** 编辑时留空表示保留当前密文;公共客户端可无 secret。 */
+  clientSecret?: string;
+  /** 单个空格分隔的 scope 串。 */
+  scopes?: string;
 }
 export interface TenantMcpConnectorPatch {
   displayName?: string;
@@ -72,6 +85,15 @@ export interface TenantMcpConnectorPatch {
   headerName?: string;
   secretEnv?: string;
   enabled?: boolean;
+  authMode?: TenantMcpConnectorAuthMode;
+  authorizeUrl?: string;
+  tokenUrl?: string;
+  clientId?: string;
+  clientSecret?: string;
+  scopes?: string;
+}
+export interface ConnectorAuthorizeResult {
+  authorizeUrl: string;
 }
 export interface ImportableTenantSkillView {
   name: string;
@@ -277,6 +299,16 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
     deleteMcpConnector: (id: string, token: string | null) =>
       request<{ ok: boolean }>(
         `/mcp-connectors/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+        token,
+      ),
+    connectorAuthorizeUrl: (tenantId: string, connectorId: string) =>
+      request<ConnectorAuthorizeResult>(
+        `/tenants/${encodeURIComponent(tenantId)}/mcp-connectors/${encodeURIComponent(connectorId)}/authorize`,
+      ),
+    revokeConnectorAuthorization: (tenantId: string, connectorId: string, token: string | null) =>
+      request<{ ok: boolean }>(
+        `/tenants/${encodeURIComponent(tenantId)}/mcp-connectors/${encodeURIComponent(connectorId)}/authorization`,
         { method: "DELETE" },
         token,
       ),

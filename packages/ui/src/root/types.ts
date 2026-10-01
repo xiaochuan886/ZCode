@@ -41,6 +41,11 @@ export interface EnterpriseRootContext {
   onSelectTenant?: (tenantId: string) => void | Promise<void>;
   onOpenModelSettings?: () => void | Promise<void>;
   onLogout?: () => void | Promise<void>;
+  /** 企业壳层提供的「分享 Skill 到租户共享层」入口；普通模式缺省，不渲染分享按钮。 */
+  onShareSkillToTenant?: (skill: {
+    name: string;
+    sourcePath: string;
+  }) => void | Promise<void>;
 }
 
 export interface RootProps {

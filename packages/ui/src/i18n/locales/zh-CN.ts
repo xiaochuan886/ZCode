@@ -3501,6 +3501,10 @@ const zhCN: Record<string, string> = {
   "settings.skills.removeFailed": "移除技能失败。",
   "settings.skills.delete.title": "删除技能",
   "settings.skills.delete.description": "确定删除「{name}」？将从磁盘移除该技能目录，且无法撤销。",
+  "settings.skills.shareToTenant.action": "分享到租户",
+  "settings.skills.shareToTenant.title": "分享到租户",
+  "settings.skills.shareToTenant.description":
+    "确定将「{name}」分享为租户共享 Skill？租户内所有专家 runtime 将重启，应用会短暂断开后自动重连。",
   "settings.skills.create.open": "新建技能",
   "settings.skills.create.taskCreateFailed":
     "无法为当前所选来源创建新会话，请稍后重试或检查该 Agent 是否可用。",

@@ -3742,6 +3742,10 @@ const enUS: Record<string, string> = {
   "settings.skills.delete.title": "Delete skill",
   "settings.skills.delete.description":
     'Delete "{name}"? This removes the skill folder from disk and cannot be undone.',
+  "settings.skills.shareToTenant.action": "Share to tenant",
+  "settings.skills.shareToTenant.title": "Share to tenant",
+  "settings.skills.shareToTenant.description":
+    'Share "{name}" as a tenant shared skill? Every expert runtime in the tenant will restart and the app will reconnect automatically after a brief disconnect.',
   "settings.skills.create.open": "New skill",
   "settings.skills.create.taskCreateFailed":
     "Could not create a new task for the selected agent. Check availability and try again.",

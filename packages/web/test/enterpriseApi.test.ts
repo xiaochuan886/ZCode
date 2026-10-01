@@ -228,6 +228,81 @@ test("connector and skill import mutations hit their tenant and id routes", asyn
   ]);
 });
 
+test("user-oauth connector payloads carry the oauth client fields and the authorization routes are scoped", async () => {
+  const calls: { url: string; method: string | undefined; body: unknown; csrf: string | null }[] =
+    [];
+  const client = createEnterpriseClient(async (url, init) => {
+    calls.push({
+      url: String(url),
+      method: init?.method,
+      body: init?.body ? JSON.parse(String(init?.body)) : null,
+      csrf: new Headers(init?.headers).get("X-CSRF-Token"),
+    });
+    return new Response(JSON.stringify({ ok: true, authorizeUrl: "https://oauth.example.test" }), {
+      status: 200,
+    });
+  });
+  await client.createMcpConnector(
+    "tenant-1",
+    {
+      connectorKey: "drive",
+      displayName: "Drive",
+      url: "https://mcp.example.com",
+      authMode: "user-oauth",
+      authorizeUrl: "https://oauth.example.test/authorize",
+      tokenUrl: "https://oauth.example.test/token",
+      clientId: "client-1",
+      clientSecret: "secret-1",
+      scopes: "mcp.read",
+    },
+    "csrf-1",
+  );
+  await client.updateMcpConnector(
+    "connector-1",
+    { authMode: "user-oauth", clientId: "client-2" },
+    "csrf-1",
+  );
+  const authorize = await client.connectorAuthorizeUrl("tenant-1", "connector-1");
+  assert.equal(authorize.authorizeUrl, "https://oauth.example.test");
+  await client.revokeConnectorAuthorization("tenant-1", "connector-1", "csrf-1");
+  assert.deepEqual(calls, [
+    {
+      url: "/api/enterprise/tenants/tenant-1/mcp-connectors",
+      method: "POST",
+      body: {
+        connectorKey: "drive",
+        displayName: "Drive",
+        url: "https://mcp.example.com",
+        authMode: "user-oauth",
+        authorizeUrl: "https://oauth.example.test/authorize",
+        tokenUrl: "https://oauth.example.test/token",
+        clientId: "client-1",
+        clientSecret: "secret-1",
+        scopes: "mcp.read",
+      },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/mcp-connectors/connector-1",
+      method: "PATCH",
+      body: { authMode: "user-oauth", clientId: "client-2" },
+      csrf: "csrf-1",
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/mcp-connectors/connector-1/authorize",
+      method: undefined,
+      body: null,
+      csrf: null,
+    },
+    {
+      url: "/api/enterprise/tenants/tenant-1/mcp-connectors/connector-1/authorization",
+      method: "DELETE",
+      body: null,
+      csrf: "csrf-1",
+    },
+  ]);
+});
+
 test("ordinary server is identified only by a missing enterprise route", async () => {
   const absent = createEnterpriseClient(async () => new Response(null, { status: 404 }));
   assert.equal(await absent.bootstrap(), null);

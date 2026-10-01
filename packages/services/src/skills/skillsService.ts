@@ -28,6 +28,7 @@ import type {
 import { DEFAULT_ENABLED_OFFICIAL_PLUGIN_IDS } from "@zcode/shared";
 import type { ISkillsService } from "./skills.js";
 import { SKILL_FILE_NAME, walkSkillMarkdownPaths } from "./skillDiscoveryWalk.js";
+import { assertNotEnterpriseManagedContent } from "../enterprise/managedContentPolicy.js";
 import { readInstalledPluginRoots } from "#src/plugins/installedPluginRoots.js";
 
 interface DiscoverResult {
@@ -1132,6 +1133,9 @@ export function createSkillsService(options?: SkillsServiceOptions): ISkillsServ
         throw new Error(`Skill not found: ${params.skillId}`);
       }
       const sourceDir = dirname(skill.path);
+      // 企业受管标记下,目标目录名命中 enterprise- 保留前缀的复制直接拒绝,
+      // 避免在通用目录制造与租户分发内容同名的新目录。
+      assertNotEnterpriseManagedContent(basename(sourceDir));
       // 通用目录根据 skill 原 scope 确定 user 还是 workspace 级
       const commonRoot =
         skill.scope === "workspace"
@@ -1160,6 +1164,8 @@ export function createSkillsService(options?: SkillsServiceOptions): ISkillsServ
       if (!skill) {
         throw new Error(`Skill not found: ${params.skillId}`);
       }
+      // 企业受管标记下,通用目录内的 enterprise-* 技能(租户分发内容)不可移除。
+      assertNotEnterpriseManagedContent(basename(dirname(skill.path)));
       const normalizedPath = skill.path.replaceAll("\\", "/").toLowerCase();
       const userCommonRoot = getUserZcodeSkillRoot().replaceAll("\\", "/").toLowerCase();
       const workspaceCommonRoot = getWorkspaceZcodeSkillRoot(params.workspacePath)
@@ -1196,6 +1202,9 @@ export function createSkillsService(options?: SkillsServiceOptions): ISkillsServ
       // sourcePath 才指向 `~/.zcode/skills/<name>` 下的目录项本身。
       const skillDir = dirname(skill.sourcePath ?? skill.path);
       const skillLeafName = basename(skillDir);
+      // 企业受管标记下,enterprise-* 目录(租户分发的共享 Skill)不可删除;
+      // 删除会绕过控制面,下一次 preparation 又会原样恢复,必须在源头拒绝。
+      assertNotEnterpriseManagedContent(skillLeafName);
       // 只解析父目录，不解析叶子本身：
       // - 叶子若是软链（正常导入场景），保持不解析，删除时才只删链接、不动目标；
       // - 父目录 realpath 后，任何“软链/junction 祖先”都会被展开到真实位置，

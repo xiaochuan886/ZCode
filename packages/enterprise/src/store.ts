@@ -6,6 +6,11 @@ import { BindingStoreSupport } from "./binding-store-support.js";
 import { CustomerStoreSupport } from "./customer-store-support.js";
 import { SessionStoreSupport } from "./session-store-support.js";
 import { ConnectorStoreSupport, type McpConnectorForRelay } from "./connector-store-support.js";
+import {
+  ConnectorAuthorizationStoreSupport,
+  type RefreshUserConnectorTokensInput,
+  type UpsertUserConnectorAuthorizationInput,
+} from "./connector-authorization-store.js";
 import { ProviderStoreSupport } from "./provider-store-support.js";
 import type { TenantModelProviderInput, TenantModelProviderPatch } from "./provider-format.js";
 import type {
@@ -15,8 +20,11 @@ import type {
 import type {
   TenantMcpConnector,
   TenantMcpConnectorDistribution,
+  TenantMcpConnectorOauthConfig,
   TenantModelProvider,
   TenantModelProviderDistribution,
+  UserConnectorAuthorization,
+  UserConnectorAuthorizationForRelay,
 } from "./types.js";
 import type { ModelCredentialEncryptionKey } from "./model-credential-format.js";
 
@@ -27,6 +35,7 @@ export interface EnterpriseStoreOptions {
 export class EnterpriseStore extends EnterpriseStoreBase {
   private readonly providerStore: ProviderStoreSupport;
   private readonly connectorStore: ConnectorStoreSupport;
+  private readonly connectorAuthorizationStore: ConnectorAuthorizationStoreSupport;
   private readonly customerStore: CustomerStoreSupport;
   private readonly bindingStore: BindingStoreSupport;
   private readonly sessionStore: SessionStoreSupport;
@@ -48,7 +57,11 @@ export class EnterpriseStore extends EnterpriseStoreBase {
       (actorId, customerId) => this.customerStore.getCustomerRuntimeTarget(actorId, customerId),
     );
     this.providerStore = new ProviderStoreSupport(db, modelCredentialsEncryptionKey);
-    this.connectorStore = new ConnectorStoreSupport(db);
+    this.connectorStore = new ConnectorStoreSupport(db, modelCredentialsEncryptionKey);
+    this.connectorAuthorizationStore = new ConnectorAuthorizationStoreSupport(
+      db,
+      modelCredentialsEncryptionKey,
+    );
   }
   static async open(
     dbPath: string,
@@ -228,5 +241,44 @@ export class EnterpriseStore extends EnterpriseStoreBase {
   }
   findMcpConnectorForRelay(connectorId: string, token: string): McpConnectorForRelay | null {
     return this.connectorStore.findMcpConnectorForRelay(connectorId, token);
+  }
+  tenantMcpConnectorOauthConfig(
+    actorId: string,
+    connectorId: string,
+  ): TenantMcpConnectorOauthConfig {
+    return this.connectorStore.tenantMcpConnectorOauthConfig(actorId, connectorId);
+  }
+  userConnectorAuthorization(
+    connectorId: string,
+    userId: string,
+  ): UserConnectorAuthorization | null {
+    return this.connectorAuthorizationStore.userConnectorAuthorization(connectorId, userId);
+  }
+  upsertUserConnectorAuthorization(input: UpsertUserConnectorAuthorizationInput): void {
+    this.connectorAuthorizationStore.upsertUserConnectorAuthorization(input);
+  }
+  deleteUserConnectorAuthorization(actorId: string, connectorId: string): void {
+    this.connectorAuthorizationStore.deleteUserConnectorAuthorization(actorId, connectorId);
+  }
+  findUserConnectorAuthorizationForRelay(
+    connectorId: string,
+    token: string,
+  ): UserConnectorAuthorizationForRelay | null {
+    return this.connectorAuthorizationStore.findUserConnectorAuthorizationForRelay(
+      connectorId,
+      token,
+    );
+  }
+  refreshUserConnectorTokens(
+    authorizationId: string,
+    tokens: RefreshUserConnectorTokensInput,
+  ): void {
+    this.connectorAuthorizationStore.refreshUserConnectorTokens(authorizationId, tokens);
+  }
+  signConnectorOauthState(sessionId: string, connectorId: string): string {
+    return this.connectorAuthorizationStore.signConnectorOauthState(sessionId, connectorId);
+  }
+  verifyConnectorOauthState(state: string, sessionId: string, connectorId: string): boolean {
+    return this.connectorAuthorizationStore.verifyConnectorOauthState(state, sessionId, connectorId);
   }
 }

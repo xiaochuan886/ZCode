@@ -89,9 +89,33 @@ const TENANT_MCP_CONNECTORS_V7 = `
     secret_env TEXT NOT NULL DEFAULT '',
     token TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
+    auth_mode TEXT NOT NULL DEFAULT 'shared',
+    authorize_url TEXT NOT NULL DEFAULT '',
+    token_url TEXT NOT NULL DEFAULT '',
+    client_id TEXT NOT NULL DEFAULT '',
+    client_secret_encrypted TEXT NOT NULL DEFAULT '',
+    scopes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(tenant_id, connector_key)
   );
+`;
+
+/** v8:每个 (连接器, 用户) 一行的 OAuth 授权;令牌密文落库,relay_token 首次授予后稳定。 */
+const USER_MCP_CONNECTOR_AUTHORIZATIONS_V8 = `
+  CREATE TABLE IF NOT EXISTS user_mcp_connector_authorizations (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    connector_id TEXT NOT NULL REFERENCES tenant_mcp_connectors(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    access_token_encrypted TEXT NOT NULL,
+    refresh_token_encrypted TEXT NOT NULL DEFAULT '',
+    relay_token TEXT NOT NULL,
+    expires_at TEXT NOT NULL DEFAULT '',
+    granted_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (connector_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS user_mcp_connector_authorizations_connector_idx
+    ON user_mcp_connector_authorizations(connector_id, user_id);
 `;
 
 const CUSTOMER_SCHEMA_V4 = `
@@ -124,7 +148,7 @@ export interface StoreSchemaHooks {
 
 export function migrateStoreSchema(db: DatabaseSync, hooks: StoreSchemaHooks = {}): void {
   const version = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
-  if (version > 7) throw new EnterpriseError("conflict");
+  if (version > 8) throw new EnterpriseError("conflict");
   if (version === 0) {
     transaction(db, () => {
       db.exec(`
@@ -149,8 +173,8 @@ export function migrateStoreSchema(db: DatabaseSync, hooks: StoreSchemaHooks = {
           PRIMARY KEY (tenant_id, provider_family),
           CHECK ((revoked_at IS NULL AND ciphertext IS NOT NULL AND nonce IS NOT NULL AND auth_tag IS NOT NULL) OR revoked_at IS NOT NULL)
         );
-        ${CUSTOMER_SCHEMA_V4}${TENANT_SKILLS_V5}${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}
-        PRAGMA user_version = 7;
+        ${CUSTOMER_SCHEMA_V4}${TENANT_SKILLS_V5}${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}${USER_MCP_CONNECTOR_AUTHORIZATIONS_V8}
+        PRAGMA user_version = 8;
       `);
     });
     ensureModelCredentialMetadataColumns(db);
@@ -325,6 +349,30 @@ ${TENANT_SKILLS_V5}
       db.exec(`${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}
         PRAGMA user_version = 7;`);
       hooks.seedTenantCatalogV7?.(db);
+    });
+  }
+  const afterV7 = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
+  if (afterV7 === 7) {
+    // v8 新增连接器 OAuth 列与每用户授权表。存量连接器全部是 shared 模式，
+    // DEFAULT 'shared' 语义与现状一致；列存在性检查与 v6 同款，容错部分修复的库。
+    transaction(db, () => {
+      const connectorColumns = new Set(
+        all(db, "PRAGMA table_info(tenant_mcp_connectors)").map((column) => String(column.name)),
+      );
+      for (const [column, definition] of [
+        ["auth_mode", "TEXT NOT NULL DEFAULT 'shared'"],
+        ["authorize_url", "TEXT NOT NULL DEFAULT ''"],
+        ["token_url", "TEXT NOT NULL DEFAULT ''"],
+        ["client_id", "TEXT NOT NULL DEFAULT ''"],
+        ["client_secret_encrypted", "TEXT NOT NULL DEFAULT ''"],
+        ["scopes", "TEXT NOT NULL DEFAULT ''"],
+      ] as const) {
+        if (!connectorColumns.has(column)) {
+          db.exec(`ALTER TABLE tenant_mcp_connectors ADD COLUMN ${column} ${definition}`);
+        }
+      }
+      db.exec(`${USER_MCP_CONNECTOR_AUTHORIZATIONS_V8}
+        PRAGMA user_version = 8;`);
     });
   }
   ensureModelCredentialMetadataColumns(db);

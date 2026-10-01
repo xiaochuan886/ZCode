@@ -9,4 +9,4 @@ export {
   CONNECTOR_KEY_PATTERN,
   type TenantMcpConnectorInput,
   type TenantMcpConnectorPatch,
-} from "./connector-store-support.js";
+} from "./connector-format.js";

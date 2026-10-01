@@ -1861,6 +1861,7 @@ export function SettingsPage({
                             workspaceIdentity={activeWorkspaceIdentity}
                             showMarketplaceBreadcrumb={pluginNavigationOrigin === "plugin-store"}
                             onCreateTask={onCreateTask}
+                            enterpriseContext={enterpriseContext}
                             onOpenPluginStore={(_returnScopeKey, intent) => {
                               // 添加市场与浏览插件都先离开设置层，再显示商店。
                               requestPluginStoreOpen({ returnScopeKey: "user", intent });
@@ -1887,6 +1888,7 @@ export function SettingsPage({
                             workspacePath={activeWorkspacePath}
                             workspaceIdentity={activeWorkspaceIdentity}
                             onCreateTask={onCreateTask}
+                            enterpriseContext={enterpriseContext}
                             onOpenPluginStore={(_returnScopeKey, intent) => {
                               // 添加市场与浏览插件都先离开设置层，再显示商店。
                               requestPluginStoreOpen({ returnScopeKey: "user", intent });

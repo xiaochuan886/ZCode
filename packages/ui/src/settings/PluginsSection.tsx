@@ -25,6 +25,7 @@ import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { TID_PLUGIN_STORE_BROWSE } from "@zcode/shared";
 import type { ZCodePluginInfo, ZCodePluginScope, ZCodePluginUserConfigOption } from "@zcode/shared";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 import {
   useBaseWorkspaceServices,
   useWorkspaceServicesResolution,
@@ -126,6 +127,8 @@ interface PluginsSectionProps {
   onCreateTask?: (request?: CreateTaskRequest) => void;
   onOpenPluginStore: (returnScopeKey?: string, intent?: "add-marketplace") => void;
   showMarketplaceBreadcrumb?: boolean;
+  /** 企业壳层上下文;透传给 Skills 渲染「分享到租户」等企业专属入口。 */
+  enterpriseContext?: EnterpriseRootContext;
 }
 
 function workspaceKey(tab: WorkspaceTabState): string {
@@ -958,6 +961,7 @@ export function PluginsSection({
   onCreateTask,
   onOpenPluginStore,
   showMarketplaceBreadcrumb = false,
+  enterpriseContext,
 }: PluginsSectionProps) {
   const { intl } = useZCodeIntl();
   const tabs = useTabStore((state) => state.tabs);
@@ -1353,6 +1357,7 @@ export function PluginsSection({
                 showMarketplaceBreadcrumb={showMarketplaceBreadcrumb}
                 reportDetailBreadcrumb={mode === "plugin"}
                 onVisibleCountChange={updateSkillCount}
+                enterpriseContext={enterpriseContext}
               />
             ) : (
               <EmptyState

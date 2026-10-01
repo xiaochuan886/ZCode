@@ -199,14 +199,30 @@ export async function handleTenantCatalogApiRequest(
     const body = await jsonBody(request);
     const url = str(body.url);
     if (!isTenantMcpEndpointAllowed(tenantId, url)) throw new EnterpriseError("validation");
-    const secretEnv = str(body.secretEnv);
-    if (!isTenantMcpSecretRef(secretEnv, tenantId)) throw new EnterpriseError("validation");
+    const authMode = body.authMode === undefined ? "shared" : text(body.authMode);
+    if (authMode !== "shared" && authMode !== "user-oauth")
+      throw new EnterpriseError("validation");
+    const secretEnv = body.secretEnv === undefined ? undefined : text(body.secretEnv);
+    if (authMode === "shared") {
+      // shared 模式仍要求租户前缀 secret 引用;user-oauth 模式由 store 侧拒绝 secretEnv。
+      if (!secretEnv || !isTenantMcpSecretRef(secretEnv, tenantId))
+        throw new EnterpriseError("validation");
+    }
     const input: TenantMcpConnectorInput = {
       connectorKey: str(body.connectorKey),
       displayName: str(body.displayName),
       url,
       ...(body.headerName === undefined ? {} : { headerName: optionalText(body.headerName) }),
-      secretEnv,
+      ...(secretEnv === undefined ? {} : { secretEnv }),
+      ...(body.enabled === undefined ? {} : { enabled: optionalBoolean(body.enabled)! }),
+      ...(body.authMode === undefined ? {} : { authMode }),
+      ...(body.authorizeUrl === undefined ? {} : { authorizeUrl: optionalText(body.authorizeUrl) }),
+      ...(body.tokenUrl === undefined ? {} : { tokenUrl: optionalText(body.tokenUrl) }),
+      ...(body.clientId === undefined ? {} : { clientId: optionalText(body.clientId) }),
+      ...(body.clientSecret === undefined
+        ? {}
+        : { clientSecret: optionalText(body.clientSecret) }),
+      ...(body.scopes === undefined ? {} : { scopes: optionalText(body.scopes) }),
     };
     await stopTenantRuntimes(tenantId);
     send(response, 201, options.store.createTenantMcpConnector(session.userId, tenantId, input));
@@ -219,17 +235,30 @@ export async function handleTenantCatalogApiRequest(
     const body = await jsonBody(request);
     if (body.url !== undefined && !isTenantMcpEndpointAllowed(current.tenantId, text(body.url)))
       throw new EnterpriseError("validation");
-    if (
-      body.secretEnv !== undefined &&
-      !isTenantMcpSecretRef(text(body.secretEnv), current.tenantId)
-    )
+    const authMode = body.authMode === undefined ? undefined : text(body.authMode);
+    if (authMode !== undefined && authMode !== "shared" && authMode !== "user-oauth")
       throw new EnterpriseError("validation");
+    const secretEnv = body.secretEnv === undefined ? undefined : text(body.secretEnv);
+    // 显式切换到 shared 时必须携带合法 secret 引用;保持 shared 现状且未改动时,
+    // 存量引用已在写入时校验过,无需重复检查。
+    if (authMode === "shared" && secretEnv !== undefined) {
+      if (!isTenantMcpSecretRef(secretEnv, current.tenantId))
+        throw new EnterpriseError("validation");
+    }
     const patch: TenantMcpConnectorPatch = {
       ...(body.displayName === undefined ? {} : { displayName: optionalText(body.displayName) }),
       ...(body.url === undefined ? {} : { url: text(body.url) }),
       ...(body.headerName === undefined ? {} : { headerName: optionalText(body.headerName) }),
-      ...(body.secretEnv === undefined ? {} : { secretEnv: text(body.secretEnv) }),
+      ...(secretEnv === undefined ? {} : { secretEnv }),
       ...(body.enabled === undefined ? {} : { enabled: optionalBoolean(body.enabled)! }),
+      ...(authMode === undefined ? {} : { authMode }),
+      ...(body.authorizeUrl === undefined ? {} : { authorizeUrl: optionalText(body.authorizeUrl) }),
+      ...(body.tokenUrl === undefined ? {} : { tokenUrl: optionalText(body.tokenUrl) }),
+      ...(body.clientId === undefined ? {} : { clientId: optionalText(body.clientId) }),
+      ...(body.clientSecret === undefined
+        ? {}
+        : { clientSecret: optionalText(body.clientSecret) }),
+      ...(body.scopes === undefined ? {} : { scopes: optionalText(body.scopes) }),
     };
     await stopTenantRuntimes(current.tenantId);
     send(

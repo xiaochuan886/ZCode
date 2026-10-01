@@ -4,7 +4,12 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ProcessRuntimeAdapter, RuntimeManager, type RuntimeAdapter } from "../src/runtime.js";
+import {
+  ContainerRuntimeAdapter,
+  ProcessRuntimeAdapter,
+  RuntimeManager,
+  type RuntimeAdapter,
+} from "../src/runtime.js";
 
 test("runtime bindings are case-specific and unhealthy runtimes restart", async () => {
   let starts = 0;
@@ -146,9 +151,9 @@ test("native session binding accepts only a task indexed for that Case workspace
   );
 });
 
-test("enterprise process runtime passes the managed model marker to native server", async () => {
+test("enterprise process runtime passes the managed model and content markers to native server", async () => {
   const root = await mkdtemp(join(tmpdir(), "enterprise-runtime-env-"));
-  const markerPath = join(root, "managed-model-marker.txt");
+  const markerPath = join(root, "managed-markers.json");
   const serverEntry = join(root, "server.mjs");
   await writeFile(
     serverEntry,
@@ -156,7 +161,13 @@ test("enterprise process runtime passes the managed model marker to native serve
       'import { createServer } from "node:http";',
       'import { writeFile } from "node:fs/promises";',
       `const markerPath = ${JSON.stringify(markerPath)};`,
-      'await writeFile(markerPath, process.env.ZCODE_ENTERPRISE_MANAGED_MODEL ?? "");',
+      "await writeFile(",
+      "  markerPath,",
+      "  JSON.stringify({",
+      '    managedModel: process.env.ZCODE_ENTERPRISE_MANAGED_MODEL ?? "",',
+      '    managedContent: process.env.ZCODE_ENTERPRISE_MANAGED_CONTENT ?? "",',
+      "  }),",
+      ");",
       "const server = createServer((request, response) => {",
       '  if (request.url !== "/api/server-info") { response.writeHead(404); response.end(); return; }',
       '  response.setHeader("content-type", "application/json");',
@@ -173,12 +184,93 @@ test("enterprise process runtime passes the managed model marker to native serve
   let handle: Awaited<ReturnType<ProcessRuntimeAdapter["start"]>> | undefined;
   try {
     handle = await adapter.start({ id: "customer-a", workspacePath: root, token: "test-token" });
-    assert.equal(await readFile(markerPath, "utf8"), "1");
+    assert.deepEqual(JSON.parse(await readFile(markerPath, "utf8")), {
+      managedModel: "1",
+      managedContent: "1",
+    });
   } finally {
     await handle?.stop();
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("enterprise container runtime passes the managed content marker via docker env", async () => {
+  const root = await mkdtemp(join(tmpdir(), "enterprise-container-env-"));
+  // 用假 docker shim 走真实 ContainerRuntimeAdapter.start 路径:记录收到的
+  // docker 参数,并为健康检查拉起一个返回 /api/server-info 的独立服务进程。
+  const shimDir = join(root, "bin");
+  const argsPath = join(root, "docker-args.jsonl");
+  const port = await allocateFreePort();
+  await mkdir(shimDir, { recursive: true });
+  await writeFile(
+    join(shimDir, "docker"),
+    [
+      "#!/usr/bin/env node",
+      'const { appendFile } = require("node:fs/promises");',
+      'const { spawn } = require("node:child_process");',
+      `const argsPath = ${JSON.stringify(argsPath)};`,
+      `const port = ${JSON.stringify(port)};`,
+      "const args = process.argv.slice(2);",
+      "appendFile(argsPath, JSON.stringify(args) + '\\n', 'utf8').then(() => {",
+      '  if (args[0] === "run") {',
+      "    const serverCode = [",
+      "      'const http = require(\"node:http\");',",
+      "      'const server = http.createServer((request, response) => {',",
+      "      '  if (request.url !== \"/api/server-info\") { response.writeHead(404); response.end(); return; }',",
+      "      '  response.setHeader(\"content-type\", \"application/json\");',",
+      `      '  response.end(JSON.stringify({ workspaces: [{ path: ${JSON.stringify(root)} }] }));',`,
+      "      '});',",
+      `      'server.listen(${port}, "127.0.0.1");',`,
+      "      'setTimeout(() => process.exit(0), 20000);',",
+      "    ].join(\"\\n\");",
+      "    const child = spawn(process.execPath, ['-e', serverCode], { detached: true, stdio: 'ignore' });",
+      "    child.unref();",
+      "    setTimeout(() => { console.log('fake-container-id'); process.exit(0); }, 150);",
+      "    return;",
+      "  }",
+      '  if (args[0] === "port") { console.log(`0.0.0.0:${port}`); process.exit(0); }',
+      "  process.exit(0);",
+      "});",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const previousPath = process.env.PATH;
+  process.env.PATH = `${shimDir}:${previousPath ?? ""}`;
+  const adapter = new ContainerRuntimeAdapter({
+    image: "zcode-enterprise-test",
+    dataRoot: root,
+  });
+  let handle: Awaited<ReturnType<ContainerRuntimeAdapter["start"]>> | undefined;
+  try {
+    handle = await adapter.start({
+      id: "customer-container",
+      workspacePath: root,
+      token: "test-token",
+    });
+    const invocations = (await readFile(argsPath, "utf8"))
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as string[]);
+    const runArgs = invocations.find((args) => args[0] === "run");
+    assert.ok(runArgs, "fake docker should have received the run invocation");
+    assert.ok(runArgs.includes("ZCODE_ENTERPRISE_MANAGED_MODEL=1"));
+    assert.ok(runArgs.includes("ZCODE_ENTERPRISE_MANAGED_CONTENT=1"));
+  } finally {
+    await handle?.stop();
+    process.env.PATH = previousPath;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+async function allocateFreePort(): Promise<number> {
+  const { createServer } = await import("node:net");
+  const server = createServer();
+  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Unable to allocate test port");
+  await new Promise<void>((done) => server.close(() => done()));
+  return address.port;
+}
 
 test("stopAll waits for an in-flight start and rejects new runtime ensures", async () => {
   let markStarted!: () => void;

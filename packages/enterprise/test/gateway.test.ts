@@ -1364,3 +1364,331 @@ test("tenant runtime stops destroy the session socket instead of leaving it half
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("user-authorized connectors run the oauth flow per user and relay private tokens", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-user-oauth-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: Buffer.alloc(32, 0x42),
+  });
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user: admin } = store.bootstrapAdmin(
+    "Tenant",
+    "oauth-flow-admin@example.test",
+    hash,
+  );
+  const memberA = store.provisionUser(admin.id, tenant.id, {
+    email: "oauth-a@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const memberB = store.provisionUser(admin.id, tenant.id, {
+    email: "oauth-b@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const tokenUrl = "https://oauth.example.test/token";
+  const endpoint = "https://user-mcp.example.test/mcp";
+  const tokenRequests: Array<{ body: string }> = [];
+  let upstreamAuthorization: string | undefined;
+  let refreshFails = false;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url === tokenUrl) {
+      const body = String(init?.body);
+      tokenRequests.push({ body });
+      const params = new URLSearchParams(body);
+      if (params.get("grant_type") === "refresh_token") {
+        if (refreshFails) return new Response("{}", { status: 400 });
+        return new Response(
+          JSON.stringify({
+            access_token: "member-a-access-refreshed",
+            refresh_token: "member-a-refresh-2",
+            expires_in: 3600,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      const code = params.get("code");
+      return new Response(
+        JSON.stringify({
+          access_token: code === "code-b" ? "member-b-access-1" : "member-a-access-1",
+          refresh_token: code === "code-b" ? "member-b-refresh-1" : "member-a-refresh-1",
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    const headers = init?.headers as Record<string, string>;
+    upstreamAuthorization = headers.authorization;
+    return new Response('event: message\ndata: {"ok":true}\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+  const priorAllowlist = process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+  process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
+    [tenant.id]: ["https://user-mcp.example.test"],
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+    fetchImpl,
+    mcpDnsLookup: async () => [{ address: "1.1.1.1", family: 4 }],
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  const relayPath = (connectorId: string) => `/api/enterprise/mcp-relay/t/${connectorId}`;
+  try {
+    const adminSession = await login(base, admin.email);
+    const sessionA = await login(base, memberA.user.email);
+    const sessionB = await login(base, memberB.user.email);
+    // 管理员创建 user-oauth 连接器(成员创建被拒)。
+    let response = await api(
+      base,
+      sessionA,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "drive",
+        displayName: "Drive",
+        url: endpoint,
+        authMode: "user-oauth",
+        authorizeUrl: "https://oauth.example.test/authorize",
+        tokenUrl,
+        clientId: "client-1",
+        clientSecret: "confidential-client-secret",
+        scopes: "mcp.read mcp.write",
+      },
+    );
+    assert.equal(response.status, 403);
+    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "POST", {
+      connectorKey: "drive",
+      displayName: "Drive",
+      url: endpoint,
+      authMode: "user-oauth",
+      authorizeUrl: "https://oauth.example.test/authorize",
+      tokenUrl,
+      clientId: "client-1",
+      clientSecret: "confidential-client-secret",
+      scopes: "mcp.read mcp.write",
+    });
+    assert.equal(response.status, 201);
+    const connector = (await response.json()) as {
+      id: string;
+      authMode: string;
+      authorized: boolean;
+    };
+    assert.equal(connector.authMode, "user-oauth");
+    assert.equal(connector.authorized, false);
+
+    // authorize 返回带签名 state 的供应商地址;共享模式连接器不允许 authorize。
+    response = await api(
+      base,
+      sessionA,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/authorize`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const { authorizeUrl } = (await response.json()) as { authorizeUrl: string };
+    const parsedAuthorize = new URL(authorizeUrl);
+    assert.equal(parsedAuthorize.origin, "https://oauth.example.test");
+    assert.equal(parsedAuthorize.pathname, "/authorize");
+    assert.equal(parsedAuthorize.searchParams.get("client_id"), "client-1");
+    assert.equal(parsedAuthorize.searchParams.get("response_type"), "code");
+    assert.equal(parsedAuthorize.searchParams.get("scope"), "mcp.read mcp.write");
+    assert.equal(
+      parsedAuthorize.searchParams.get("redirect_uri"),
+      `${base}/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/callback`,
+    );
+    const state = parsedAuthorize.searchParams.get("state")!;
+    assert.ok(state);
+
+    // 坏 state / error 参数 / 他人会话的 state 一律 302 到失败标记。
+    const callbackPath = `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/callback`;
+    for (const query of ["?error=access_denied", "?code=code-a&state=tampered", ""]) {
+      const failed = await fetch(`${base}${callbackPath}${query}`, {
+        headers: { cookie: sessionA.cookie },
+        redirect: "manual",
+      });
+      assert.equal(failed.status, 302, query);
+      assert.equal(failed.headers.get("location"), "/?enterpriseOauth=failed");
+    }
+    const wrongSession = await fetch(`${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`, {
+      headers: { cookie: sessionB.cookie },
+      redirect: "manual",
+    });
+    assert.equal(wrongSession.status, 302);
+    assert.equal(wrongSession.headers.get("location"), "/?enterpriseOauth=failed");
+
+    // 成员 A 完成回调:服务端换码,302 回根路径。
+    response = await fetch(`${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`, {
+      headers: { cookie: sessionA.cookie },
+      redirect: "manual",
+    });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get("location"), "/");
+    assert.equal(tokenRequests.length, 1);
+    const exchanged = new URLSearchParams(tokenRequests[0]!.body);
+    assert.equal(exchanged.get("grant_type"), "authorization_code");
+    assert.equal(exchanged.get("code"), "code-a");
+    assert.equal(exchanged.get("client_id"), "client-1");
+    assert.equal(exchanged.get("client_secret"), "confidential-client-secret");
+    assert.equal(
+      exchanged.get("redirect_uri"),
+      `${base}/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/callback`,
+    );
+
+    // 目录按访问用户给出授权状态:A 已连接,B 未连接。
+    response = await api(base, sessionA, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, true);
+    response = await api(base, sessionB, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, false);
+
+    // 中继:A 的 relay token 注入 A 的 access token;错误令牌 401。
+    const relayTokenA = store.userConnectorAuthorization(connector.id, memberA.user.id)!
+      .relayToken;
+    assert.equal(
+      store.userConnectorAuthorization(connector.id, memberB.user.id),
+      null,
+      "member B must not hold an authorization",
+    );
+    let relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: "Bearer wrong-user-token-aaaaaaaaaaaaaaaaaaaa", "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 401);
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenA}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list", id: 1 }),
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.match(await relayResponse.text(), /event: message/);
+    assert.equal(upstreamAuthorization, "Bearer member-a-access-1");
+
+    // 过期 + refresh:先刷新再放行,新 token 注入上游并持久化。
+    store.upsertUserConnectorAuthorization({
+      connectorId: connector.id,
+      userId: memberA.user.id,
+      accessToken: "member-a-access-1",
+      refreshToken: "member-a-refresh-1",
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenA}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.equal(upstreamAuthorization, "Bearer member-a-access-refreshed");
+    assert.equal(tokenRequests.length, 2);
+    const refreshed = new URLSearchParams(tokenRequests[1]!.body);
+    assert.equal(refreshed.get("grant_type"), "refresh_token");
+    assert.equal(refreshed.get("refresh_token"), "member-a-refresh-1");
+    // 未再过期时复用持久化的新 token,不重复刷新。
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenA}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.equal(upstreamAuthorization, "Bearer member-a-access-refreshed");
+    assert.equal(tokenRequests.length, 2);
+
+    // 刷新失败:503 诊断,授权保留等待重新连接。
+    refreshFails = true;
+    store.upsertUserConnectorAuthorization({
+      connectorId: connector.id,
+      userId: memberA.user.id,
+      accessToken: "member-a-access-refreshed",
+      refreshToken: "member-a-refresh-2",
+      expiresAt: new Date(Date.now() - 1_000).toISOString(),
+    });
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenA}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 503);
+    refreshFails = false;
+
+    // B 走自己的授权流程,中继注入 B 的 token。
+    response = await api(
+      base,
+      sessionB,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/authorize`,
+      "GET",
+    );
+    const stateB = new URL(((await response.json()) as { authorizeUrl: string }).authorizeUrl)
+      .searchParams.get("state")!;
+    response = await fetch(`${base}${callbackPath}?code=code-b&state=${encodeURIComponent(stateB)}`, {
+      headers: { cookie: sessionB.cookie },
+      redirect: "manual",
+    });
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get("location"), "/");
+    const relayTokenB = store.userConnectorAuthorization(connector.id, memberB.user.id)!.relayToken;
+    assert.notEqual(relayTokenB, relayTokenA);
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenB}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 200);
+    assert.equal(upstreamAuthorization, "Bearer member-b-access-1");
+
+    // 撤销:成员只能撤销自己的行;撤销后中继拒绝,他人不受影响。
+    response = await api(
+      base,
+      sessionB,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/authorization`,
+      "DELETE",
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenB}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 401);
+    relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${relayTokenA}` },
+      body: "{}",
+    });
+    assert.equal(relayResponse.status, 200);
+    response = await api(base, sessionB, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, false);
+    // 撤销不存在的行 → 404。
+    response = await api(
+      base,
+      sessionB,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/authorization`,
+      "DELETE",
+    );
+    assert.equal(response.status, 404);
+    // 令牌/密文绝不进 API 响应。
+    response = await api(base, sessionA, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    const listingBody = await response.text();
+    for (const secret of [
+      "member-a-access-1",
+      "member-a-access-refreshed",
+      "confidential-client-secret",
+      relayTokenA,
+    ]) {
+      assert.equal(listingBody.includes(secret), false);
+    }
+  } finally {
+    if (priorAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+    else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
+    await gateway.close();
+    store.close();
+  }
+});

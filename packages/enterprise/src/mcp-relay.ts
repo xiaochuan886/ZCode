@@ -1,18 +1,21 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Agent, buildConnector } from "undici";
+import type { Agent } from "undici";
+import {
+  pinnedAgent,
+  resolveWithTimeout,
+  upstreamHeaderTimeoutMs,
+} from "./mcp-relay-net.js";
 import { writeAsyncIterableBackpressured } from "./backpressure.js";
+import { resolveUserConnectorRelayAccess } from "./connector-oauth.js";
 import {
   isTenantMcpEndpointAllowed,
   isTenantMcpSecretRef,
-  resolvePublicMcpAddress,
   type McpDnsLookup,
   systemMcpDnsLookup,
 } from "./mcp-policy.js";
 import type { EnterpriseStore } from "./store.js";
 
 const maxConcurrentRelays = 32;
-const upstreamHeaderTimeoutMs = 15_000;
-const dnsResolveTimeoutMs = 5_000;
 
 export class McpRelayConcurrencyLimiter {
   private active = 0;
@@ -144,47 +147,6 @@ async function proxyMcpRelay(
   }
 }
 
-function pinnedAgent(endpoint: URL, address: { address: string; family: number }): Agent {
-  const connector = buildConnector({ timeout: upstreamHeaderTimeoutMs });
-  const pinnedConnector: buildConnector.connector = (options, callback) =>
-    connector(
-      {
-        ...options,
-        hostname: address.address,
-        host: address.address,
-        servername: endpoint.hostname,
-      },
-      callback,
-    );
-  return new Agent({
-    connect: pinnedConnector,
-    connections: 1,
-    pipelining: 0,
-    headersTimeout: upstreamHeaderTimeoutMs,
-    bodyTimeout: 0,
-  });
-}
-
-async function resolveWithTimeout(
-  hostname: string,
-  dnsLookup: McpDnsLookup,
-): Promise<{ address: string; family: number }> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      resolvePublicMcpAddress(hostname, dnsLookup),
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(
-          () => reject(new Error("MCP DNS lookup timed out")),
-          dnsResolveTimeoutMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
-  }
-}
-
 export async function handleMcpRelayRequest(
   path: string,
   request: IncomingMessage,
@@ -288,8 +250,9 @@ export async function handleMcpRelayRequest(
 
 /**
  * 租户系统连接器中继:令牌对照 SQLite 中的连接器行做常数时间比较,之后与客户
- * 绑定共用同一套 allowlist / DNS pinning / 重定向拒绝 / 并发上限路径;上游
- * secret 从连接器的 secret_env 网关环境变量注入,注入头名可配置。
+ * 绑定共用同一套 allowlist / DNS pinning / 重定向拒绝 / 并发上限路径。shared 模式
+ * 的上游 secret 从连接器的 secret_env 网关环境变量注入;user-oauth 模式在共享
+ * 令牌未命中时按每用户授权行鉴权,注入该用户的 access token,过期时先按需刷新。
  */
 async function relayTenantConnector(
   connectorId: string,
@@ -303,24 +266,40 @@ async function relayTenantConnector(
   const provided = bearerToken(request);
   const connector = provided ? store.findMcpConnectorForRelay(connectorId, provided) : null;
   if (!connector) {
-    send(response, 401, { error: "Unauthorized" });
+    const userAccess = provided
+      ? await resolveUserConnectorRelayAccess(store, connectorId, provided, fetchImpl)
+      : null;
+    if (!userAccess || userAccess.kind === "absent") {
+      send(response, 401, { error: "Unauthorized" });
+      return true;
+    }
+    if (userAccess.kind === "refresh-failed") {
+      process.emitWarning(
+        `MCP connector ${connectorId} unavailable: user token refresh failed; re-authorization required.`,
+        { code: "ZCODE_ENTERPRISE_CONNECTOR_REFRESH_FAILED" },
+      );
+      send(response, 503, { error: "MCP credential unavailable" });
+      return true;
+    }
+    const endpoint = validatedConnectorEndpoint(
+      userAccess.authorization.tenantId,
+      userAccess.authorization.url,
+      response,
+    );
+    if (!endpoint) return true;
+    await relayUpstream(
+      request,
+      response,
+      endpoint,
+      { headerName: userAccess.authorization.headerName, value: `Bearer ${userAccess.accessToken}` },
+      fetchImpl,
+      dnsLookup,
+      limiter,
+    );
     return true;
   }
-  let endpoint: URL;
-  try {
-    endpoint = new URL(connector.url);
-  } catch {
-    send(response, 503, { error: "MCP service unavailable" });
-    return true;
-  }
-  if (
-    !isTenantMcpEndpointAllowed(connector.tenantId, endpoint.toString()) ||
-    endpoint.username ||
-    endpoint.password
-  ) {
-    send(response, 503, { error: "MCP service unavailable" });
-    return true;
-  }
+  const endpoint = validatedConnectorEndpoint(connector.tenantId, connector.url, response);
+  if (!endpoint) return true;
   if (!isTenantMcpSecretRef(connector.secretEnv, connector.tenantId)) {
     process.emitWarning(`MCP connector ${connector.id} unavailable: secret reference is invalid.`, {
       code: "ZCODE_ENTERPRISE_MCP_SECRET_INVALID",
@@ -349,6 +328,30 @@ async function relayTenantConnector(
     limiter,
   );
   return true;
+}
+
+/** 连接器上游地址解析 + allowlist/userinfo 校验;失败时已写响应并返回 null。 */
+function validatedConnectorEndpoint(
+  tenantId: string,
+  url: string,
+  response: ServerResponse,
+): URL | null {
+  let endpoint: URL;
+  try {
+    endpoint = new URL(url);
+  } catch {
+    send(response, 503, { error: "MCP service unavailable" });
+    return null;
+  }
+  if (
+    !isTenantMcpEndpointAllowed(tenantId, endpoint.toString()) ||
+    endpoint.username ||
+    endpoint.password
+  ) {
+    send(response, 503, { error: "MCP service unavailable" });
+    return null;
+  }
+  return endpoint;
 }
 
 async function relayUpstream(

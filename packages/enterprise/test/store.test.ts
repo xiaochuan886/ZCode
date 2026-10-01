@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { ModelCredentialCipher } from "../src/model-credential-format.js";
 import { EnterpriseStore } from "../src/store.js";
 
@@ -121,7 +121,7 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
         .prepare("PRAGMA user_version")
         .get().user_version,
     );
-    assert.equal(version, 7);
+    assert.equal(version, 8);
     const customers = migrated.listCustomers(user.id, tenant.id);
     assert.equal(customers.length, 1);
     assert.equal(customers[0]!.id, customer.id);
@@ -163,6 +163,26 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
     // v7:供应商目录与系统连接器表就位。
     assert.equal(tables.has("tenant_model_providers"), true, "v7 provider table should exist");
     assert.equal(tables.has("tenant_mcp_connectors"), true, "v7 connector table should exist");
+    // v8:连接器 OAuth 列与每用户授权表就位。
+    assert.equal(
+      tables.has("user_mcp_connector_authorizations"),
+      true,
+      "v8 authorization table should exist",
+    );
+    const connectorColumns = (
+      migrated as unknown as {
+        db: { prepare(sql: string): { all(): Array<{ name: string }> } };
+      }
+    ).db
+      .prepare("PRAGMA table_info(tenant_mcp_connectors)")
+      .all();
+    for (const column of ["auth_mode", "authorize_url", "token_url", "client_id"]) {
+      assert.equal(
+        connectorColumns.some((entry) => entry.name === column),
+        true,
+        `v8 column ${column} should exist`,
+      );
+    }
   } finally {
     migrated.close();
     await rm(dir, { recursive: true, force: true });
@@ -290,9 +310,11 @@ test("v7 migration creates catalog tables on a fresh database", async () => {
       ).map((row) => row.name),
     );
     raw.close();
-    assert.equal(version, 7);
+    // v8 之后全新库基线即 v8:目录表与每用户授权表一次到位。
+    assert.equal(version, 8);
     assert.equal(tables.has("tenant_model_providers"), true);
     assert.equal(tables.has("tenant_mcp_connectors"), true);
+    assert.equal(tables.has("user_mcp_connector_authorizations"), true);
   } finally {
     store.close();
     await rm(dir, { recursive: true, force: true });
@@ -667,6 +689,240 @@ test("tenant connectors hold stable relay tokens and stay admin-gated", async ()
     } finally {
       if (priorSecret === undefined) delete process.env[secretEnv];
       else process.env[secretEnv] = priorSecret;
+    }
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("user-oauth connectors cross-reject auth fields and keep per-user tokens encrypted with stable relay tokens", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-user-oauth-"));
+  const dbPath = join(dir, "enterprise.db");
+  const store = await EnterpriseStore.open(dbPath, join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: catalogEncryptionKey,
+  });
+  try {
+    const { tenant, user } = store.bootstrapAdmin("Oauth", "oauth-admin@example.test", "hash");
+    const member = store.provisionUser(user.id, tenant.id, {
+      email: "oauth-member@example.test",
+      passwordHash: "hash-member",
+      role: "member",
+    });
+    const endpoint = "https://oauth-mcp.example.test/mcp";
+    const oauth = {
+      authorizeUrl: "https://oauth.example.test/authorize",
+      tokenUrl: "https://oauth.example.test/token",
+      clientId: "client-1",
+    };
+
+    // user-oauth 模式禁止 secretEnv;shared 模式禁止 OAuth 字段且仍要求 secretEnv。
+    assert.throws(
+      () =>
+        store.createTenantMcpConnector(user.id, tenant.id, {
+          connectorKey: "mixed",
+          displayName: "Mixed",
+          url: endpoint,
+          authMode: "user-oauth",
+          secretEnv: "ZCODE_ENTERPRISE_MCP_SECRET_DEADBEEF_NAME",
+          ...oauth,
+        }),
+      /validation/,
+    );
+    assert.throws(
+      () =>
+        store.createTenantMcpConnector(user.id, tenant.id, {
+          connectorKey: "shared-oauth",
+          displayName: "Bad shared",
+          url: endpoint,
+          scopes: "read",
+        }),
+      /validation/,
+    );
+    assert.throws(
+      () =>
+        store.createTenantMcpConnector(user.id, tenant.id, {
+          connectorKey: "no-client",
+          displayName: "Missing client",
+          url: endpoint,
+          authMode: "user-oauth",
+          authorizeUrl: oauth.authorizeUrl,
+          tokenUrl: oauth.tokenUrl,
+        }),
+      /validation/,
+    );
+    assert.throws(
+      () =>
+        store.createTenantMcpConnector(user.id, tenant.id, {
+          connectorKey: "insecure-url",
+          displayName: "Insecure",
+          url: endpoint,
+          authMode: "user-oauth",
+          authorizeUrl: "http://oauth.example.test/authorize",
+          tokenUrl: oauth.tokenUrl,
+          clientId: oauth.clientId,
+        }),
+      /validation/,
+    );
+    assert.throws(
+      () =>
+        store.updateTenantMcpConnector(user.id, "missing", { authMode: "user-oauth" }),
+      /not_found/,
+    );
+
+    const connector = store.createTenantMcpConnector(user.id, tenant.id, {
+      connectorKey: "drive",
+      displayName: "Drive",
+      url: endpoint,
+      authMode: "user-oauth",
+      ...oauth,
+      clientSecret: "super-secret-client-value",
+      scopes: "mcp.read mcp.write",
+    });
+    assert.equal(connector.authMode, "user-oauth");
+    assert.equal(connector.authorized, false);
+    assert.equal(JSON.stringify(connector).includes("super-secret-client-value"), false);
+    assert.equal(store.getTenantMcpConnector(member.user.id, connector.id).authorized, false);
+
+    // 授权 upsert:relay_token 首次授予后稳定,重新授权覆盖令牌。
+    store.upsertUserConnectorAuthorization({
+      connectorId: connector.id,
+      userId: member.user.id,
+      accessToken: "member-access-1",
+      refreshToken: "member-refresh-1",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    const first = store.userConnectorAuthorization(connector.id, member.user.id)!;
+    assert.equal(first.accessToken, "member-access-1");
+    assert.ok(first.relayToken.length >= 32, "relay token must be random and non-trivial");
+    store.upsertUserConnectorAuthorization({
+      connectorId: connector.id,
+      userId: member.user.id,
+      accessToken: "member-access-2",
+    });
+    const second = store.userConnectorAuthorization(connector.id, member.user.id)!;
+    assert.equal(second.accessToken, "member-access-2");
+    assert.equal(second.refreshToken, "");
+    assert.equal(second.relayToken, first.relayToken, "relay token must stay stable across re-grants");
+    // 授权状态按访问用户区分:成员已连接,管理员未连接。
+    assert.equal(store.getTenantMcpConnector(member.user.id, connector.id).authorized, true);
+    assert.equal(store.getTenantMcpConnector(user.id, connector.id).authorized, false);
+
+    // 密文落库:明文 access/refresh/client secret 都不在库文件字符串中。
+    const raw = new DatabaseSync(dbPath);
+    const authRows = raw
+      .prepare(
+        "SELECT access_token_encrypted,refresh_token_encrypted FROM user_mcp_connector_authorizations",
+      )
+      .all() as Array<Record<string, string>>;
+    const connectorRows = raw
+      .prepare("SELECT client_secret_encrypted FROM tenant_mcp_connectors")
+      .all() as Array<Record<string, string>>;
+    raw.close();
+    assert.equal(authRows.length, 1);
+    const blob = JSON.stringify([authRows, connectorRows]);
+    for (const plaintext of ["member-access-1", "member-access-2", "super-secret-client-value"]) {
+      assert.equal(blob.includes(plaintext), false, `${plaintext} must be encrypted at rest`);
+    }
+
+    // 中继解析(用户授权路径):timing-safe 命中并解出客户端配置;错误令牌拒绝。
+    const relayHit = store.findUserConnectorAuthorizationForRelay(connector.id, first.relayToken);
+    assert.equal(relayHit!.accessToken, "member-access-2");
+    assert.equal(relayHit!.clientSecret, "super-secret-client-value");
+    assert.equal(relayHit!.tokenUrl, oauth.tokenUrl);
+    assert.equal(
+      store.findUserConnectorAuthorizationForRelay(connector.id, "x".repeat(first.relayToken.length)),
+      null,
+    );
+    // 刷新持久化:只换令牌与到期,relay_token 不变。
+    store.refreshUserConnectorTokens(relayHit!.authorizationId, {
+      accessToken: "member-access-3",
+      refreshToken: "member-refresh-3",
+      expiresAt: new Date(Date.now() + 7_200_000).toISOString(),
+    });
+    const refreshed = store.userConnectorAuthorization(connector.id, member.user.id)!;
+    assert.equal(refreshed.accessToken, "member-access-3");
+    assert.equal(refreshed.refreshToken, "member-refresh-3");
+    assert.equal(refreshed.relayToken, first.relayToken);
+
+    // 成员只能撤销自己的授权行;管理员无行时同样 404。
+    assert.throws(
+      () => store.deleteUserConnectorAuthorization(user.id, connector.id),
+      /not_found/,
+    );
+    store.deleteUserConnectorAuthorization(member.user.id, connector.id);
+    assert.equal(store.userConnectorAuthorization(connector.id, member.user.id), null);
+    assert.equal(store.findUserConnectorAuthorizationForRelay(connector.id, first.relayToken), null);
+    assert.equal(store.getTenantMcpConnector(member.user.id, connector.id).authorized, false);
+    assert.throws(
+      () => store.deleteUserConnectorAuthorization(member.user.id, connector.id),
+      /not_found/,
+    );
+
+    // 编辑时空 clientSecret 保留密文;切回 shared 时清除授权行。
+    const renamed = store.updateTenantMcpConnector(user.id, connector.id, {
+      displayName: "Drive 2",
+      clientSecret: "",
+    });
+    assert.equal(renamed.displayName, "Drive 2");
+    const relaySecretAfterRename = store.tenantMcpConnectorOauthConfig(user.id, connector.id);
+    assert.equal(relaySecretAfterRename.clientSecret, "super-secret-client-value");
+    store.upsertUserConnectorAuthorization({
+      connectorId: connector.id,
+      userId: member.user.id,
+      accessToken: "member-access-4",
+    });
+    const validSecretEnv = `ZCODE_ENTERPRISE_MCP_SECRET_${tenant.id.replaceAll("-", "").toUpperCase()}_OAUTH`;
+    const switched = store.updateTenantMcpConnector(user.id, connector.id, {
+      authMode: "shared",
+      secretEnv: validSecretEnv,
+    });
+    assert.equal(switched.authMode, "shared");
+    assert.equal(switched.authorized, true);
+    assert.equal(store.userConnectorAuthorization(connector.id, member.user.id), null);
+    // shared 连接器不参与用户授权解析。
+    assert.equal(
+      store.findUserConnectorAuthorizationForRelay(connector.id, first.relayToken),
+      null,
+    );
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("connector oauth state binds session and connector and expires after ten minutes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-oauth-state-"));
+  const store = await EnterpriseStore.open(join(dir, "enterprise.db"), join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: catalogEncryptionKey,
+  });
+  try {
+    const state = store.signConnectorOauthState("session-1", "connector-1");
+    assert.equal(store.verifyConnectorOauthState(state, "session-1", "connector-1"), true);
+    assert.equal(store.verifyConnectorOauthState(state, "session-2", "connector-1"), false);
+    assert.equal(store.verifyConnectorOauthState(state, "session-1", "connector-2"), false);
+    assert.equal(store.verifyConnectorOauthState(`${state}x`, "session-1", "connector-1"), false);
+    assert.equal(store.verifyConnectorOauthState("garbage", "session-1", "connector-1"), false);
+    assert.equal(store.verifyConnectorOauthState("", "session-1", "connector-1"), false);
+    // 另一把密钥签出的 state 必须拒绝:不同实例的派生密钥不同。
+    const other = await EnterpriseStore.open(join(dir, "other.db"), join(dir, "workspaces"), {
+      modelCredentialsEncryptionKey: Buffer.alloc(32, 0x24),
+    });
+    try {
+      const foreign = other.signConnectorOauthState("session-1", "connector-1");
+      assert.equal(store.verifyConnectorOauthState(foreign, "session-1", "connector-1"), false);
+    } finally {
+      other.close();
+    }
+    // 过期拒绝:10 分钟窗口(mock 时钟推进)。
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    try {
+      const fresh = store.signConnectorOauthState("session-1", "connector-1");
+      assert.equal(store.verifyConnectorOauthState(fresh, "session-1", "connector-1"), true);
+      mock.timers.tick(10 * 60 * 1000 + 1);
+      assert.equal(store.verifyConnectorOauthState(fresh, "session-1", "connector-1"), false);
+    } finally {
+      mock.timers.reset();
     }
   } finally {
     store.close();

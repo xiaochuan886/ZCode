@@ -7,11 +7,11 @@ import { EnterpriseLogin } from "./EnterpriseLogin.js";
 import { EnterpriseNativeRoot } from "./EnterpriseNativeRoot.js";
 import { EnterpriseSettings } from "./EnterpriseSettings.js";
 import type { EnterpriseBootstrap } from "./api.js";
-import type { EnterpriseRootContext, NativeServices } from "./EnterpriseNativeRoot.js";
+import type { NativeServices } from "./EnterpriseNativeRoot.js";
 import { useEnterpriseAction } from "./useEnterpriseAction.js";
 import { useEnterpriseCustomerCatalog } from "./useEnterpriseCustomerCatalog.js";
 import { useTenantModelStatus } from "./useTenantModelStatus.js";
-import { createEnterpriseClient } from "./api.js";
+import { createEnterpriseClient, EnterpriseApiError } from "./api.js";
 
 const api = createEnterpriseClient();
 
@@ -183,8 +183,10 @@ export function EnterpriseApp({
     });
   }
 
-  const enterpriseContext: EnterpriseRootContext | undefined = useMemo(() => {
+  const enterpriseContext = useMemo(() => {
     if (!bootstrap.user) return undefined;
+    // 导入租户共享 Skill 是管理员动作(requireAdmin);成员侧不提供分享入口。
+    const canShareSkills = selectedTenant?.role === "admin";
     return {
       user: {
         id: bootstrap.user.id,
@@ -199,7 +201,7 @@ export function EnterpriseApp({
         workspacePath: customer.workspacePath,
       })),
       activeCustomerId: activeCustomer?.id ?? null,
-      onSelectCustomer: (customerId) => {
+      onSelectCustomer: (customerId: string) => {
         activateBookkeeping(customerId);
       },
       onOpenCustomerWorkspace: (workspacePath: string) => {
@@ -211,9 +213,40 @@ export function EnterpriseApp({
       onSelectTenant: changeTenant,
       onOpenCustomerHome: () => setSettingsOpen(true),
       onLogout: logout,
+      ...(canShareSkills
+        ? {
+            onShareSkillToTenant: async (skill: { name: string; sourcePath: string }) => {
+              if (!tenantId) return;
+              // 源路径落在某客户工作区前缀内 → workspace 来源;否则视为专家 HOME 个人 Skill。
+              const workspaceCustomer = customers.find(
+                (item) =>
+                  item.workspacePath && skill.sourcePath.startsWith(`${item.workspacePath}/`),
+              );
+              try {
+                await api.importTenantSkill(
+                  tenantId,
+                  {
+                    name: skill.name,
+                    origin: workspaceCustomer ? "workspace" : "home",
+                    ...(workspaceCustomer ? { workspaceId: workspaceCustomer.id } : {}),
+                  },
+                  bootstrap.csrfToken,
+                );
+                // 导入成功会停止租户专家 runtime:socket 关闭触发自愈重连并重挂 Root。
+              } catch (cause) {
+                // 源目录在分享后被删除等场景返回 404,复用既有「未找到该 Skill」提示。
+                if (cause instanceof EnterpriseApiError && cause.status === 404) {
+                  setError(t.importSkillNotFound);
+                  return;
+                }
+                throw cause;
+              }
+            },
+          }
+        : {}),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bootstrap, tenantId, customers, activeCustomer?.id]);
+  }, [bootstrap, tenantId, customers, activeCustomer?.id, selectedTenant?.role]);
 
   if (!bootstrap.user) {
     return (

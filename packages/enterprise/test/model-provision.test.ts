@@ -301,3 +301,111 @@ test("tenant connectors are distributed into the expert HOME config with the man
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("user-oauth connectors distribute only into the authorized expert HOME", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-user-oauth-prepare-"));
+  const runtimeDataRoot = join(dir, "runtimes");
+  const store = await EnterpriseStore.open(join(dir, "enterprise.db"), join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: Buffer.alloc(32, 0x42),
+  });
+  try {
+    const admin = store.bootstrapAdmin("Oauth", "oauth-admin@example.test", "hash");
+    const member = store.provisionUser(admin.user.id, admin.tenant.id, {
+      email: "oauth-member@example.test",
+      passwordHash: "hash",
+      role: "member",
+    });
+    const tenantId = admin.tenant.id;
+    const priorAllowlist = process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+    process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = JSON.stringify({
+      [tenantId]: ["https://user-mcp.example.test"],
+    });
+    const connector = store.createTenantMcpConnector(admin.user.id, tenantId, {
+      connectorKey: "drive",
+      displayName: "Drive",
+      url: "https://user-mcp.example.test/mcp",
+      authMode: "user-oauth",
+      authorizeUrl: "https://oauth.example.test/authorize",
+      tokenUrl: "https://oauth.example.test/token",
+      clientId: "client-1",
+    });
+    const target = (userId: string) => ({
+      id: `e-${userId}-${tenantId}`,
+      tenantId,
+      userId,
+      workspacePath: "",
+      runtimeId: `e-${userId}-${tenantId}`,
+      kind: "expert" as const,
+    });
+    const homeConfig = (userId: string) =>
+      join(runtimeDataRoot, target(userId).runtimeId, ".zcode", "config.json");
+    const servers = async (userId: string) =>
+      (
+        JSON.parse(await readFile(homeConfig(userId), "utf8")) as {
+          mcp: { servers: Record<string, { headers: { Authorization: string } }> };
+        }
+      ).mcp.servers;
+    try {
+      // 未授权:两个专家 HOME 都没有条目。
+      await prepareExpertRuntime({
+        target: target(admin.user.id),
+        store,
+        runtimeDataRoot,
+        relayOrigin: "https://gateway.example.test",
+      });
+      await prepareExpertRuntime({
+        target: target(member.user.id),
+        store,
+        runtimeDataRoot,
+        relayOrigin: "https://gateway.example.test",
+      });
+      assert.equal((await servers(admin.user.id))["enterprise-drive"], undefined);
+      assert.equal((await servers(member.user.id))["enterprise-drive"], undefined);
+
+      // 管理员授权后:仅其 HOME 拿到带个人 relay token 的条目。
+      store.upsertUserConnectorAuthorization({
+        connectorId: connector.id,
+        userId: admin.user.id,
+        accessToken: "admin-access-token",
+      });
+      const adminRelayToken = store.userConnectorAuthorization(connector.id, admin.user.id)!
+        .relayToken;
+      await prepareExpertRuntime({
+        target: target(admin.user.id),
+        store,
+        runtimeDataRoot,
+        relayOrigin: "https://gateway.example.test",
+      });
+      await prepareExpertRuntime({
+        target: target(member.user.id),
+        store,
+        runtimeDataRoot,
+        relayOrigin: "https://gateway.example.test",
+      });
+      const adminEntry = (await servers(admin.user.id))["enterprise-drive"]!;
+      assert.ok(adminEntry, "authorized expert should receive the connector entry");
+      assert.equal(
+        adminEntry.headers.Authorization,
+        `Bearer ${adminRelayToken}`,
+        "entry must carry the per-user relay token",
+      );
+      assert.equal((await servers(member.user.id))["enterprise-drive"], undefined);
+
+      // 撤销后下一次准备移除条目。
+      store.deleteUserConnectorAuthorization(admin.user.id, connector.id);
+      await prepareExpertRuntime({
+        target: target(admin.user.id),
+        store,
+        runtimeDataRoot,
+        relayOrigin: "https://gateway.example.test",
+      });
+      assert.equal((await servers(admin.user.id))["enterprise-drive"], undefined);
+    } finally {
+      if (priorAllowlist === undefined) delete process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON;
+      else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
+    }
+  } finally {
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

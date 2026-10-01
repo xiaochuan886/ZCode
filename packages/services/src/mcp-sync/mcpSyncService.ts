@@ -20,6 +20,7 @@ import type {
 } from "@zcode/shared";
 import type { IMcpSyncService } from "./mcpSync.js";
 import { checkRemoteSyncDirectoryWriteAccess } from "../remote-sync/remoteSyncWriteAccess.js";
+import { assertNotEnterpriseManagedContent } from "../enterprise/managedContentPolicy.js";
 
 type McpConfigKeyName = "mcp.servers" | "mcpServers";
 
@@ -230,6 +231,9 @@ async function loadMcpFromUserDirectory(
 }
 
 async function saveMcpToUserDirectory(payload: SaveCliMcpToUserDirectoryRequest): Promise<void> {
+  // 企业受管标记下,`enterprise-` 保留名(租户连接器分发的 mcp.servers 槽位)的
+  // 新增/改写/删除/启停一律拒绝;这是设置页 MCP 编辑器所有写动作的唯一落盘入口。
+  assertNotEnterpriseManagedContent(payload.name);
   if (payload.action === "set-enabled") {
     if (typeof payload.enabled !== "boolean") {
       throw new Error("Missing enabled value for MCP set-enabled action");

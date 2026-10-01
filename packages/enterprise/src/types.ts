@@ -97,6 +97,8 @@ export interface TenantModelProvider {
 export interface TenantModelProviderDistribution extends TenantModelProvider {
   apiKey: string;
 }
+/** 连接器认证模式:shared = 网关共享 secret;user-oauth = 每用户 OAuth 令牌。 */
+export type TenantMcpConnectorAuthMode = "shared" | "user-oauth";
 /** 租户系统连接器(投影):只暴露 endpoint host 与配置状态,不回传 token/secret。 */
 export interface TenantMcpConnector {
   id: string;
@@ -107,6 +109,9 @@ export interface TenantMcpConnector {
   headerName: string;
   secretConfigured: boolean;
   enabled: boolean;
+  authMode: TenantMcpConnectorAuthMode;
+  /** user-oauth 模式下当前用户是否已连接自己的账号;shared 模式恒为 true。 */
+  authorized: boolean;
 }
 /** 连接器分发行:网关准备专家 runtime 时使用,secret 只在网关环境解析。 */
 export interface TenantMcpConnectorDistribution {
@@ -116,6 +121,47 @@ export interface TenantMcpConnectorDistribution {
   url: string;
   headerName: string;
   secretEnv: string;
+  authMode: TenantMcpConnectorAuthMode;
+}
+/** user-oauth 连接器的 OAuth 客户端配置(网关内部解密读取,绝不进浏览器响应)。 */
+export interface TenantMcpConnectorOauthConfig {
+  tenantId: string;
+  connectorId: string;
+  authorizeUrl: string;
+  tokenUrl: string;
+  clientId: string;
+  /** 公共客户端可为空;存储时已解密。 */
+  clientSecret: string | null;
+  /** 单个空格分隔的 scope 串,未配置为空字符串。 */
+  scopes: string;
+}
+/** 解密后的每用户授权(网关内部使用)。 */
+export interface UserConnectorAuthorization {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  /** 首次授予生成,重新授权保持稳定,写入专家 HOME 的中继令牌。 */
+  relayToken: string;
+}
+/** 中继鉴权用的每用户授权(含连接器上游与 OAuth 客户端配置,网关内部使用)。 */
+export interface UserConnectorAuthorizationForRelay {
+  authorizationId: string;
+  connectorId: string;
+  tenantId: string;
+  url: string;
+  headerName: string;
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string | null;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+}
+/** OAuth 令牌端点响应解析结果。 */
+export interface ConnectorOauthTokenSet {
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string;
 }
 export class EnterpriseError extends Error {
   constructor(

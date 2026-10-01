@@ -7,6 +7,7 @@ import {
   ExternalLink,
   Import,
   Plus,
+  Share2,
   Trash2,
   UploadCloud,
   WandSparkles,
@@ -25,6 +26,7 @@ import type {
 } from "@zcode/shared";
 import { ZCODE_AGENT_PROVIDER } from "@zcode/shared";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
+import type { EnterpriseRootContext } from "@/root/types.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { toast } from "@/components/ui/toast.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
@@ -155,6 +157,8 @@ interface SkillsSectionProps {
   onOpenPluginStore?: () => void;
   showMarketplaceBreadcrumb?: boolean;
   reportDetailBreadcrumb?: boolean;
+  /** 企业壳层上下文;提供 onShareSkillToTenant 时才渲染「分享到租户」入口。 */
+  enterpriseContext?: EnterpriseRootContext;
 }
 
 export function SkillsSection({
@@ -170,6 +174,7 @@ export function SkillsSection({
   onOpenPluginStore,
   showMarketplaceBreadcrumb = false,
   reportDetailBreadcrumb = false,
+  enterpriseContext,
 }: SkillsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
@@ -453,6 +458,37 @@ export function SkillsSection({
     ],
   );
 
+  // 企业模式专属:把当前 Skill 分享为租户共享 Skill。由企业壳层负责鉴权和导入,
+  // 导入会重启租户内全部专家 runtime,连接自愈后 Root 会重新挂载。
+  const handleShareSkillToTenant = useCallback(
+    async (skill: SkillSummary) => {
+      const onShareSkillToTenant = enterpriseContext?.onShareSkillToTenant;
+      if (!onShareSkillToTenant) {
+        return;
+      }
+      const confirmed = await confirmDialog({
+        title: intl.formatMessage({ id: "settings.skills.shareToTenant.title" }),
+        description: intl.formatMessage(
+          { id: "settings.skills.shareToTenant.description" },
+          { name: skill.name },
+        ),
+        confirmLabel: intl.formatMessage({ id: "common.confirm" }),
+      });
+      if (!confirmed) {
+        return;
+      }
+      try {
+        await onShareSkillToTenant({
+          name: skill.name,
+          sourcePath: skill.sourcePath ?? skill.path,
+        });
+      } catch (shareError) {
+        setError(shareError instanceof Error ? shareError.message : String(shareError));
+      }
+    },
+    [confirmDialog, enterpriseContext, intl],
+  );
+
   const scopedProviderSkills = useMemo(() => {
     const allProviderSkills = filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
     const pluginStoreMatchesTarget =
@@ -626,6 +662,23 @@ export function SkillsSection({
                   void setEnabled(skill.id, checked);
                 }}
               />
+              {enterpriseContext?.onShareSkillToTenant ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 text-foreground-subtle hover:bg-hover hover:text-foreground"
+                  aria-label={intl.formatMessage({
+                    id: "settings.skills.shareToTenant.action",
+                  })}
+                  title={intl.formatMessage({
+                    id: "settings.skills.shareToTenant.action",
+                  })}
+                  onClick={() => void handleShareSkillToTenant(skill)}
+                >
+                  <Share2 className="size-3.5" aria-hidden="true" />
+                </Button>
+              ) : null}
               <Button
                 type="button"
                 variant="ghost"
