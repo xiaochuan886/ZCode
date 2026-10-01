@@ -8,6 +8,7 @@ import {
 } from "@zcode/rpc";
 import type { IServiceAccessor } from "@zcode/services";
 import { RemoteServiceAccess } from "./remoteServiceAccess.js";
+import { withRpcRequestTimeout, type RpcRequestTimeoutOptions } from "./rpcTimeout.js";
 
 export interface WebSocketConnectionCloseEvent {
   code: number;
@@ -15,7 +16,7 @@ export interface WebSocketConnectionCloseEvent {
   wasClean: boolean;
 }
 
-interface WebSocketConnectionOptions {
+interface WebSocketConnectionOptions extends RpcRequestTimeoutOptions {
   onClose?: (event: WebSocketConnectionCloseEvent) => void;
   onOpenSocket?: (socket: WebSocket) => void;
 }
@@ -94,12 +95,23 @@ export function connectViaWebSocket(
       settled = true;
       options?.onOpenSocket?.(ws);
       const socket = wrapBrowserWebSocket(ws);
-      resolve(connectViaProtocol(new SocketProtocol(socket)));
+      resolve(
+        connectViaProtocol(new SocketProtocol(socket), {
+          requestTimeoutMs: options?.requestTimeoutMs,
+        }),
+      );
     });
   });
 }
 
-export function connectViaProtocol(protocol: IMessagePassingProtocol): IServiceAccessor {
+export function connectViaProtocol(
+  protocol: IMessagePassingProtocol,
+  options?: RpcRequestTimeoutOptions,
+): IServiceAccessor {
   const client = new ChannelClient(protocol);
-  return new RemoteServiceAccess(client);
+  // Final defense against half-dead transports: every request/response call
+  // gets a per-request timeout (default 60s, `requestTimeoutMs: 0` disables)
+  // and rejects with a typed timeout error instead of never settling. Event
+  // subscriptions and the connection-level close handling are unaffected.
+  return new RemoteServiceAccess(withRpcRequestTimeout(client, options?.requestTimeoutMs));
 }

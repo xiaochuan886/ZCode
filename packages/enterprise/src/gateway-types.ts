@@ -17,6 +17,12 @@ export type GatewayOptions = {
   modelRuntimeDataRoot?: string;
   fetchImpl?: typeof fetch;
   mcpDnsLookup?: McpDnsLookup;
+  /** 空闲回收窗口(毫秒);未设置或 0 = 关闭。窗口内无附着会话 socket 即回收。 */
+  runtimeIdleMs?: number;
+  /** 空闲回收巡检间隔(毫秒),默认 60s;仅测试需要调小。 */
+  runtimeReapIntervalMs?: number;
+  /** 并发存活 runtime 上限;未设置或 0 = 不限。超限时先驱逐最久未活跃的 runtime。 */
+  maxRuntimes?: number;
 };
 
 export type EnterpriseApiHelpers = {

@@ -2,10 +2,15 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
-    "lib": ["es2025", "dom", "dom.iterable"]
+    // rootDir is the package root (not src) so the node:test suite under
+    // test/ can be part of the same project (mirrors packages/enterprise).
+    "rootDir": ".",
+    "lib": ["es2025", "dom", "dom.iterable"],
+    // test/ imports node:test / node:assert; @types/node resolves from the
+    // workspace root, so no package dependency needs to be added for it.
+    "types": ["node"]
   },
-  "include": ["src"],
+  "include": ["src", "test"],
   // client 直接依赖 rpc，如果不显式引用 rpc project，typecheck 会顺着 workspace 包入口重新编译 rpc 源码。
   // 补 references 后，client 会优先读取 rpc 已生成的声明文件。
   "references": [{ "path": "../services" }, { "path": "../rpc" }]

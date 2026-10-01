@@ -76,6 +76,9 @@ export function EnterpriseApp({
     const wsUrl = (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + "/ws";
     const opened: { current: WebSocket | null } = { current: null };
     const services = await connectViaWebSocket(wsUrl, {
+      // 会话压缩等长操作的服务端预算是 5 分钟,超过客户端默认 60s 超时;
+      // 壳层放宽到 300s,半死连接的兜底仍由 socket 自愈负责。
+      requestTimeoutMs: 300_000,
       onOpenSocket: (ws) => {
         opened.current = ws;
       },

@@ -17,6 +17,19 @@ const host = process.env["ZCODE_ENTERPRISE_HOST"] ?? "127.0.0.1";
 const expectedOrigin = process.env["ZCODE_ENTERPRISE_ORIGIN"];
 const configuredRelayOrigin = process.env["ZCODE_ENTERPRISE_RELAY_ORIGIN"] ?? expectedOrigin;
 
+/** 非负整数环境变量:未设置/空 = 0(功能关闭);非法值在启动时立即失败而不是静默忽略。 */
+function nonNegativeIntegerEnv(name: string): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return 0;
+  const parsed = Number.parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 0 || String(parsed) !== raw)
+    throw new Error(`${name} must be a non-negative integer`);
+  return parsed;
+}
+
+const idleRuntimeMinutes = nonNegativeIntegerEnv("ZCODE_ENTERPRISE_RUNTIME_IDLE_MINUTES");
+const maxRuntimes = nonNegativeIntegerEnv("ZCODE_ENTERPRISE_MAX_RUNTIMES");
+
 async function main() {
   if (mode !== "container" && mode !== "process")
     throw new Error("Unsupported enterprise runtime mode");
@@ -77,6 +90,8 @@ async function main() {
     port: Number(process.env["ZCODE_ENTERPRISE_PORT"] ?? 3031),
     ...(expectedOrigin ? { expectedOrigin } : {}),
     ...(configuredRelayOrigin ? { relayOrigin: configuredRelayOrigin } : {}),
+    ...(idleRuntimeMinutes > 0 ? { runtimeIdleMs: idleRuntimeMinutes * 60_000 } : {}),
+    ...(maxRuntimes > 0 ? { maxRuntimes } : {}),
     modelRuntimeDataRoot: `${dataRoot}/runtimes`,
   });
   await gateway.listen();

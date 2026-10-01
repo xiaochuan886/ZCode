@@ -13,11 +13,11 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
-import { expertRuntimeId } from "../src/types.js";
+import { expertRuntimeId, type EnterpriseRuntimeTarget } from "../src/types.js";
 import { nativePathAllowed, nativeTarget } from "../src/proxy.js";
 import { EnterpriseStore } from "../src/store.js";
 import { EnterpriseAuth } from "../src/auth.js";
-import { RuntimeManager } from "../src/runtime.js";
+import { RuntimeManager, type RuntimeCase } from "../src/runtime.js";
 import { createEnterpriseGateway } from "../src/gateway.js";
 import { materializeCustomer } from "../src/gateway-prepare.js";
 
@@ -1466,17 +1466,23 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       },
     );
     assert.equal(response.status, 403);
-    response = await api(base, adminSession, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "POST", {
-      connectorKey: "drive",
-      displayName: "Drive",
-      url: endpoint,
-      authMode: "user-oauth",
-      authorizeUrl: "https://oauth.example.test/authorize",
-      tokenUrl,
-      clientId: "client-1",
-      clientSecret: "confidential-client-secret",
-      scopes: "mcp.read mcp.write",
-    });
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "POST",
+      {
+        connectorKey: "drive",
+        displayName: "Drive",
+        url: endpoint,
+        authMode: "user-oauth",
+        authorizeUrl: "https://oauth.example.test/authorize",
+        tokenUrl,
+        clientId: "client-1",
+        clientSecret: "confidential-client-secret",
+        scopes: "mcp.read mcp.write",
+      },
+    );
     assert.equal(response.status, 201);
     const connector = (await response.json()) as {
       id: string;
@@ -1518,18 +1524,24 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       assert.equal(failed.status, 302, query);
       assert.equal(failed.headers.get("location"), "/?enterpriseOauth=failed");
     }
-    const wrongSession = await fetch(`${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`, {
-      headers: { cookie: sessionB.cookie },
-      redirect: "manual",
-    });
+    const wrongSession = await fetch(
+      `${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`,
+      {
+        headers: { cookie: sessionB.cookie },
+        redirect: "manual",
+      },
+    );
     assert.equal(wrongSession.status, 302);
     assert.equal(wrongSession.headers.get("location"), "/?enterpriseOauth=failed");
 
     // 成员 A 完成回调:服务端换码,302 回根路径。
-    response = await fetch(`${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`, {
-      headers: { cookie: sessionA.cookie },
-      redirect: "manual",
-    });
+    response = await fetch(
+      `${base}${callbackPath}?code=code-a&state=${encodeURIComponent(state)}`,
+      {
+        headers: { cookie: sessionA.cookie },
+        redirect: "manual",
+      },
+    );
     assert.equal(response.status, 302);
     assert.equal(response.headers.get("location"), "/");
     assert.equal(tokenRequests.length, 1);
@@ -1544,14 +1556,23 @@ test("user-authorized connectors run the oauth flow per user and relay private t
     );
 
     // 目录按访问用户给出授权状态:A 已连接,B 未连接。
-    response = await api(base, sessionA, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    response = await api(
+      base,
+      sessionA,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
     assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, true);
-    response = await api(base, sessionB, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    response = await api(
+      base,
+      sessionB,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
     assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, false);
 
     // 中继:A 的 relay token 注入 A 的 access token;错误令牌 401。
-    const relayTokenA = store.userConnectorAuthorization(connector.id, memberA.user.id)!
-      .relayToken;
+    const relayTokenA = store.userConnectorAuthorization(connector.id, memberA.user.id)!.relayToken;
     assert.equal(
       store.userConnectorAuthorization(connector.id, memberB.user.id),
       null,
@@ -1559,7 +1580,10 @@ test("user-authorized connectors run the oauth flow per user and relay private t
     );
     let relayResponse = await fetch(`${base}${relayPath(connector.id)}`, {
       method: "POST",
-      headers: { authorization: "Bearer wrong-user-token-aaaaaaaaaaaaaaaaaaaa", "content-type": "application/json" },
+      headers: {
+        authorization: "Bearer wrong-user-token-aaaaaaaaaaaaaaaaaaaa",
+        "content-type": "application/json",
+      },
       body: "{}",
     });
     assert.equal(relayResponse.status, 401);
@@ -1625,12 +1649,16 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/authorize`,
       "GET",
     );
-    const stateB = new URL(((await response.json()) as { authorizeUrl: string }).authorizeUrl)
-      .searchParams.get("state")!;
-    response = await fetch(`${base}${callbackPath}?code=code-b&state=${encodeURIComponent(stateB)}`, {
-      headers: { cookie: sessionB.cookie },
-      redirect: "manual",
-    });
+    const stateB = new URL(
+      ((await response.json()) as { authorizeUrl: string }).authorizeUrl,
+    ).searchParams.get("state")!;
+    response = await fetch(
+      `${base}${callbackPath}?code=code-b&state=${encodeURIComponent(stateB)}`,
+      {
+        headers: { cookie: sessionB.cookie },
+        redirect: "manual",
+      },
+    );
     assert.equal(response.status, 302);
     assert.equal(response.headers.get("location"), "/");
     const relayTokenB = store.userConnectorAuthorization(connector.id, memberB.user.id)!.relayToken;
@@ -1664,7 +1692,12 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       body: "{}",
     });
     assert.equal(relayResponse.status, 200);
-    response = await api(base, sessionB, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    response = await api(
+      base,
+      sessionB,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
     assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, false);
     // 撤销不存在的行 → 404。
     response = await api(
@@ -1675,7 +1708,12 @@ test("user-authorized connectors run the oauth flow per user and relay private t
     );
     assert.equal(response.status, 404);
     // 令牌/密文绝不进 API 响应。
-    response = await api(base, sessionA, `/api/enterprise/tenants/${tenant.id}/mcp-connectors`, "GET");
+    response = await api(
+      base,
+      sessionA,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
     const listingBody = await response.text();
     for (const secret of [
       "member-a-access-1",
@@ -1690,5 +1728,359 @@ test("user-authorized connectors run the oauth flow per user and relay private t
     else process.env.ZCODE_ENTERPRISE_MCP_ALLOWLIST_JSON = priorAllowlist;
     await gateway.close();
     store.close();
+  }
+});
+
+async function waitFor(what: string, predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/** 记录 start/stop 事件的假 adapter:input.id 已被 manager 规范化为 runtimeId。 */
+function recordingManagerFor(url: string): { manager: RuntimeManager; events: string[] } {
+  const events: string[] = [];
+  const manager = new RuntimeManager({
+    async start(input) {
+      events.push(`start:${input.id}`);
+      return {
+        id: `fake-${input.id}`,
+        url,
+        workspacePath: input.workspacePath,
+        stop: async () => {
+          events.push(`stop:${input.id}`);
+        },
+      };
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  return { manager, events };
+}
+
+/** 侦查 stop 调用:回收/驱逐必须复用传入 beforeStop 的 fail-fast 停止路径。 */
+class StopSpyRuntimeManager extends RuntimeManager {
+  readonly stopCalls: Array<{ runtimeId: string; beforeStopRan: boolean }> = [];
+  override async stop(caseInfo: RuntimeCase, beforeStop?: () => void): Promise<void> {
+    let beforeStopRan = false;
+    await super.stop(caseInfo, () => {
+      beforeStopRan = true;
+      beforeStop?.();
+    });
+    this.stopCalls.push({ runtimeId: caseInfo.runtimeId ?? caseInfo.id, beforeStopRan });
+  }
+}
+
+/** 触发一次原生代理请求:ensureRuntime 在代理前完成,不需要目标可达。 */
+async function ensureViaProxy(base: string, token: string): Promise<void> {
+  await fetch(`${base}/api/server-info`, {
+    headers: { cookie: `enterprise_session=${token}` },
+  });
+}
+
+test("idle reaping is disabled by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-reap-off-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "reap-off@example.test", hash);
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  const auth = new EnterpriseAuth(store);
+  const { manager, events } = recordingManagerFor("http://127.0.0.1:9");
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+    // 未设置 runtimeIdleMs:即使间隔配置存在也绝不回收,开发行为保持不变。
+    runtimeReapIntervalMs: 25,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await auth.login(user.email, password);
+    store.activateCustomer(browser.session.id, customer.id);
+    await ensureViaProxy(base, browser.token);
+    const target = store.getActiveRuntimeTarget(browser.session.id)!;
+    assert.ok(manager.getBinding(target));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(
+      events.filter((event) => event.startsWith("stop:")),
+      [],
+    );
+    assert.ok(manager.getBinding(target), "an idle runtime must survive when reaping is off");
+  } finally {
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an idle runtime without attached sockets is reaped through the fail-fast stop path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-reap-idle-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "reap-idle@example.test", hash);
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  const auth = new EnterpriseAuth(store);
+  const manager = new StopSpyRuntimeManager({
+    async start(input) {
+      return {
+        id: `fake-${input.id}`,
+        url: "http://127.0.0.1:9",
+        workspacePath: input.workspacePath,
+        stop: async () => undefined,
+      };
+    },
+    async healthy() {
+      return true;
+    },
+  });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+    runtimeIdleMs: 60,
+    runtimeReapIntervalMs: 25,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await auth.login(user.email, password);
+    store.activateCustomer(browser.session.id, customer.id);
+    await ensureViaProxy(base, browser.token);
+    const target = store.getActiveRuntimeTarget(browser.session.id)!;
+    assert.ok(manager.getBinding(target));
+    await waitFor("idle runtime to be reaped", () => manager.stopCalls.length > 0);
+    assert.deepEqual(
+      manager.stopCalls.map((call) => [call.runtimeId, call.beforeStopRan]),
+      // 回收必须经过与租户变更相同的 stopRuntime:空闲定义下本无附着 socket,
+      // 断言 beforeStop 已传递并执行,即等价于"销毁 socket 后停止"的共享路径。
+      [[target.runtimeId, true]],
+    );
+    await waitFor("reaped runtime to leave the live set", () => !manager.getBinding(target));
+  } finally {
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("an attached session socket keeps the runtime alive until it detaches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-reap-attached-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "reap-attached@example.test", hash);
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  const runtimeTarget = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await once(runtimeTarget, "listening");
+  const runtimePort = (runtimeTarget.address() as AddressInfo).port;
+  const { manager, events } = recordingManagerFor(`http://127.0.0.1:${runtimePort}`);
+  const auth = new EnterpriseAuth(store);
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+    runtimeIdleMs: 60,
+    runtimeReapIntervalMs: 25,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const browser = await auth.login(user.email, password);
+    const activated = await fetch(`${base}/api/enterprise/customers/${customer.id}/activate`, {
+      method: "POST",
+      headers: {
+        cookie: `enterprise_session=${browser.token}; enterprise_csrf=${browser.csrfToken}`,
+        origin: base,
+        "x-csrf-token": browser.csrfToken,
+        "content-type": "application/json",
+      },
+      body: "{}",
+    });
+    assert.equal(activated.status, 200);
+    // ws 升级本身会 ensureRuntime;打开的浏览器 tab 就是持续活跃信号。
+    const socket = new NodeWebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { Cookie: `enterprise_session=${browser.token}`, Origin: base },
+    });
+    await once(socket, "open");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.deepEqual(
+      events.filter((event) => event.startsWith("stop:")),
+      [],
+    );
+    const target = store.getActiveRuntimeTarget(browser.session.id);
+    assert.ok(target, "attached runtime target");
+    assert.ok(manager.getBinding(target), "an attached runtime must not be reaped");
+    socket.close();
+    await waitFor("detached runtime to be reaped", () =>
+      events.some((event) => event.startsWith("stop:")),
+    );
+  } finally {
+    await new Promise<void>((resolve) => {
+      runtimeTarget.close(() => resolve());
+    });
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("the runtime cap evicts the least-recently-active idle runtime before admitting a new one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-cap-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user: admin } = store.bootstrapAdmin("Tenant", "cap-admin@example.test", hash);
+  const { user: member } = store.provisionUser(admin.id, tenant.id, {
+    email: "cap-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const customer = await store.createCustomer(admin.id, tenant.id, { name: "Acme" });
+  const auth = new EnterpriseAuth(store);
+  const { manager, events } = recordingManagerFor("http://127.0.0.1:9");
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+    maxRuntimes: 1,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  const bindingFor = (userId: string): EnterpriseRuntimeTarget => ({
+    id: expertRuntimeId(userId, tenant.id),
+    runtimeId: expertRuntimeId(userId, tenant.id),
+    tenantId: tenant.id,
+    userId,
+    workspacePath: customer.workspacePath,
+    kind: "expert",
+  });
+  try {
+    const adminAuth = await auth.login(admin.email, password);
+    store.activateCustomer(adminAuth.session.id, customer.id);
+    await ensureViaProxy(base, adminAuth.token);
+    assert.ok(manager.getBinding(bindingFor(admin.id)));
+    // 第二个专家的 ensure 触发上限:先驱逐空闲的第一个 runtime,再启动新的。
+    const memberAuth = await auth.login(member.email, password);
+    store.activateCustomer(memberAuth.session.id, customer.id);
+    await ensureViaProxy(base, memberAuth.token);
+    assert.deepEqual(events, [
+      `start:${expertRuntimeId(admin.id, tenant.id)}`,
+      `stop:${expertRuntimeId(admin.id, tenant.id)}`,
+      `start:${expertRuntimeId(member.id, tenant.id)}`,
+    ]);
+    assert.equal(manager.getBinding(bindingFor(admin.id)), null);
+    assert.ok(manager.getBinding(bindingFor(member.id)));
+  } finally {
+    await gateway.close();
+    store.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cap eviction destroys the evicted expert's attached socket fail-fast", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-cap-socket-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const nativeSockets = new Set<Duplex>();
+  const native = createHttpServer((request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end("{}");
+  });
+  native.on("upgrade", (request, socket) => {
+    nativeSockets.add(socket);
+    socket.once("close", () => nativeSockets.delete(socket));
+    const key = String(request.headers["sec-websocket-key"] ?? "");
+    const accept = createHash("sha1")
+      .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest("base64");
+    socket.write(
+      `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`,
+    );
+  });
+  const nativeAddress = await listen(native);
+  const nativeOrigin = `http://127.0.0.1:${nativeAddress.port}`;
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"));
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user: admin } = store.bootstrapAdmin("Tenant", "cap-ws-admin@example.test", hash);
+  const { user: member } = store.provisionUser(admin.id, tenant.id, {
+    email: "cap-ws-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const customer = await store.createCustomer(admin.id, tenant.id, { name: "Acme" });
+  const auth = new EnterpriseAuth(store);
+  const { manager, events } = recordingManagerFor(nativeOrigin);
+  const gateway = createEnterpriseGateway({
+    store,
+    auth,
+    runtimes: manager,
+    staticRoot: dir,
+    port: 0,
+    maxRuntimes: 1,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    // 第一个专家保持浏览器 socket 附着;上限驱逐仍会选它(唯一候选,附着仅降低优先级)。
+    const browser = await login(base, admin.email);
+    const activated = await api(
+      base,
+      browser,
+      `/api/enterprise/customers/${customer.id}/activate`,
+      "POST",
+      {},
+    );
+    assert.equal(activated.status, 200);
+    const socket = new NodeWebSocket(`ws://127.0.0.1:${address.port}/ws`, {
+      headers: { Cookie: browser.cookie, Origin: base },
+    });
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await once(socket, "open");
+    const memberAuth = await auth.login(member.email, password);
+    store.activateCustomer(memberAuth.session.id, customer.id);
+    await ensureViaProxy(base, memberAuth.token);
+    await Promise.race([
+      closed,
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error("evicted expert socket was not destroyed")), 5000),
+      ),
+    ]);
+    assert.ok(events.includes(`stop:${expertRuntimeId(admin.id, tenant.id)}`));
+    assert.ok(
+      manager.getBinding({
+        id: expertRuntimeId(member.id, tenant.id),
+        runtimeId: expertRuntimeId(member.id, tenant.id),
+        workspacePath: customer.workspacePath,
+      }),
+    );
+  } finally {
+    await gateway.close();
+    // 网关侧 socket.destroy() 对上游只做半关闭(FIN),原生侧升级 socket 需要显式
+    // 销毁,否则 server.close 回调悬置(与 membership 撤销测试相同的收尾方式)。
+    for (const socket of nativeSockets) socket.destroy();
+    await new Promise<void>((resolve) => {
+      native.close(() => resolve());
+      native.closeAllConnections();
+    });
+    store.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });

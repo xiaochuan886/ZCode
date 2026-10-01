@@ -9,6 +9,8 @@ import { handleEnterpriseApiRequest } from "./enterprise-api.js";
 import type { GatewayOptions } from "./gateway-types.js";
 import { attachEnterpriseWebSocketHandler } from "./gateway-websocket.js";
 import { handleMcpRelayRequest, McpRelayConcurrencyLimiter } from "./mcp-relay.js";
+import { RuntimeGovernor } from "./gateway-reap.js";
+import type { RuntimeBinding } from "./runtime.js";
 import { cookies } from "./gateway-cookies.js";
 import { prepareExpertRuntime } from "./gateway-prepare.js";
 import { publicCustomer, runtimeTargetsForTenant } from "./gateway-runtime.js";
@@ -116,27 +118,39 @@ export function createEnterpriseGateway(options: GatewayOptions) {
       workspacePaths: customers.map((customer) => customer.workspacePath),
     };
   };
+  // 空闲回收与并发上限(可选,默认关闭):治理器复用上面的 stopRuntime 停止路径。
+  const governor = new RuntimeGovernor({
+    store: options.store,
+    runtimes: options.runtimes,
+    options,
+    sockets,
+    stopRuntime,
+  });
   const ensureRuntime = async (
     rawValue: EnterpriseRuntimeTarget,
     userId?: string,
     requestOrigin?: string,
   ) => {
     const value = expertTargetWithWorkspaces(rawValue);
-    // 专家 runtime 准备:供应商目录 + 租户共享 Skill + 系统连接器下发到专家数据卷。
-    // workspacePaths 同时提供挂载清单,让容器把租户全部客户工作区挂进来。
-    return await options.runtimes.ensure(value, {
-      beforeStart: async () => {
-        await prepareExpertRuntime({
-          target: value,
-          store: options.store,
-          runtimeDataRoot: options.modelRuntimeDataRoot,
-          // 中继地址优先用 operator 配置;否则取触发请求的 origin(两个调用方都有请求)。
-          relayOrigin: validatedOrigin(
-            options.relayOrigin ?? options.expectedOrigin ?? requestOrigin ?? fallbackOrigin(),
-          ),
-        });
-      },
-    });
+    return await governor.ensure(
+      value,
+      async (): Promise<RuntimeBinding> =>
+        // 专家 runtime 准备:供应商目录 + 租户共享 Skill + 系统连接器下发到专家数据卷。
+        // workspacePaths 同时提供挂载清单,让容器把租户全部客户工作区挂进来。
+        await options.runtimes.ensure(value, {
+          beforeStart: async () => {
+            await prepareExpertRuntime({
+              target: value,
+              store: options.store,
+              runtimeDataRoot: options.modelRuntimeDataRoot,
+              // 中继地址优先用 operator 配置;否则取触发请求的 origin(两个调用方都有请求)。
+              relayOrigin: validatedOrigin(
+                options.relayOrigin ?? options.expectedOrigin ?? requestOrigin ?? fallbackOrigin(),
+              ),
+            });
+          },
+        }),
+    );
   };
 
   const server = createServer(async (request, response) => {
@@ -315,6 +329,7 @@ export function createEnterpriseGateway(options: GatewayOptions) {
         server.listen(options.port ?? 3031, options.host ?? "127.0.0.1", done),
       ),
     close: async () => {
+      governor.close();
       for (const id of sockets.keys()) closeSockets(id);
       try {
         await options.runtimes.stopAll();

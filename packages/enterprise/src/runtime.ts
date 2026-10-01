@@ -97,6 +97,16 @@ export class RuntimeManager {
     return this.live.get(runtimeId)?.binding ?? null;
   }
 
+  /** 当前存活 runtime 的绑定快照(只读);空闲回收与并发上限据此枚举,不复制状态。 */
+  listLive(): RuntimeBinding[] {
+    return [...this.live.values()].map((entry) => entry.binding);
+  }
+
+  /** 启动中(含存活健康复检)的 runtime id;回收与驱逐跳过这些,避免与 ensure 竞争。 */
+  pendingRuntimeIds(): string[] {
+    return [...this.pending.keys()];
+  }
+
   async ownsSession(caseInfo: RuntimeCase, nativeSessionId: string): Promise<boolean> {
     const runtimeId = caseInfo.runtimeId ?? caseInfo.id;
     return (
