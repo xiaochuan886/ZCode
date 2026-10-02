@@ -12,15 +12,31 @@ export interface Tenant {
   name: string;
   role?: "admin" | "member";
 }
-export type ModelApiType = "anthropic-messages" | "openai-chat-completions";
+export type ModelApiType = "anthropic-messages" | "openai-chat-completions" | "openai-responses";
 /** Provider catalog row projection: the API key never leaves the server, only its last four. */
+/** 单模型的目录元数据:徽标展示用(上下文/输入输出格式/工具调用);enabled 缺省视为 true。 */
+export interface EnterpriseModelMetadata {
+  id: string;
+  enabled?: boolean;
+  contextWindow?: number;
+  inputFormat?: {
+    supportsText: boolean;
+    supportsImage: boolean;
+    supportsVideo: boolean;
+    supportsAudio: boolean;
+    supportsPdf: boolean;
+  };
+  outputFormat?: { supportsText: boolean };
+  supportsToolCall?: boolean;
+  supportsJsonSchemaOutput?: boolean;
+}
 export interface ModelProviderView {
   id: string;
   providerKey: string;
   displayName: string;
   apiType: ModelApiType;
   baseUrl: string;
-  models: string[];
+  models: EnterpriseModelMetadata[];
   defaultModel: string | null;
   isDefault: boolean;
   enabled: boolean;
@@ -32,7 +48,7 @@ export interface ModelProviderInput {
   apiType: ModelApiType;
   baseUrl: string;
   apiKey: string;
-  models?: string[];
+  models?: (string | EnterpriseModelMetadata)[];
   defaultModel?: string;
   isDefault?: boolean;
   enabled?: boolean;
@@ -43,13 +59,14 @@ export interface ModelProviderPatch {
   apiType?: ModelApiType;
   baseUrl?: string;
   apiKey?: string;
-  models?: string[];
+  models?: (string | EnterpriseModelMetadata)[];
   defaultModel?: string | null;
   isDefault?: boolean;
   enabled?: boolean;
 }
 export interface ModelProviderTestResult {
   ok: boolean;
+  /** 连接测试返回上游模型 id 列表(不含元数据)。 */
   models?: string[];
   error?: string;
 }

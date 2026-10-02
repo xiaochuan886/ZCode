@@ -95,9 +95,39 @@ export interface StoreSchemaHooks {
   seedTenantCatalogV7?: (db: DatabaseSync) => void;
 }
 
+/**
+ * v10 行内迁移:把 `tenant_model_providers.models` 从 `["id",...]`(纯字符串数组,
+ * v9 及之前)原位转换为 `[{"id":"id"},...]`(富条目对象数组)。返回 undefined 表示
+ * 行无需改写(已是对象数组——幂等防御,正常链路中老库不可能出现)。
+ * 损坏行(非法 JSON/非数组/混合形状)抛 conflict 让迁移事务整体回滚,由 operator
+ * 修库后重试,而不是带着半迁移数据继续跑。
+ */
+function migrateProviderModelsToV10(raw: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new EnterpriseError("conflict");
+  }
+  if (!Array.isArray(parsed)) throw new EnterpriseError("conflict");
+  const objectEntries = parsed.every((entry) => {
+    return (
+      typeof entry === "object" &&
+      entry !== null &&
+      !Array.isArray(entry) &&
+      typeof (entry as { id?: unknown }).id === "string"
+    );
+  });
+  if (objectEntries) return undefined;
+  const stringEntries = parsed.every((entry) => typeof entry === "string");
+  if (!stringEntries) throw new EnterpriseError("conflict");
+  // 原位转换:仅包一层 {id},id 顺序与去重结果保持不变(写入时已校验过)。
+  return JSON.stringify(parsed.map((entry) => ({ id: entry })));
+}
+
 export function migrateStoreSchema(db: DatabaseSync, hooks: StoreSchemaHooks = {}): void {
   const version = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
-  if (version > 9) throw new EnterpriseError("conflict");
+  if (version > 10) throw new EnterpriseError("conflict");
   if (version === 0) {
     transaction(db, () => {
       db.exec(`
@@ -123,7 +153,7 @@ export function migrateStoreSchema(db: DatabaseSync, hooks: StoreSchemaHooks = {
           CHECK ((revoked_at IS NULL AND ciphertext IS NOT NULL AND nonce IS NOT NULL AND auth_tag IS NOT NULL) OR revoked_at IS NOT NULL)
         );
         ${CUSTOMER_SCHEMA_V4}${TENANT_SKILLS_V5}${TENANT_MODEL_PROVIDERS_V7}${TENANT_MCP_CONNECTORS_V7}${USER_MCP_CONNECTOR_AUTHORIZATIONS_V8}${CUSTOMER_ACCESS_GRANTS_V9}
-        PRAGMA user_version = 9;
+        PRAGMA user_version = 10;
       `);
     });
     ensureModelCredentialMetadataColumns(db);
@@ -337,6 +367,20 @@ ${TENANT_SKILLS_V5}
       }
       db.exec(`${CUSTOMER_ACCESS_GRANTS_V9}
         PRAGMA user_version = 9;`);
+    });
+  }
+  const afterV9 = Number(one(db, "PRAGMA user_version")?.user_version ?? 0);
+  if (afterV9 === 9) {
+    // v10 行内迁移:models 列从纯字符串数组改为富条目对象数组(per-model 元数据,
+    // 前端徽标展示用)。无 DDL;逐行原位转换,事务化,损坏行整体回滚。
+    transaction(db, () => {
+      const rows = all(db, "SELECT rowid, models FROM tenant_model_providers");
+      const update = db.prepare("UPDATE tenant_model_providers SET models=? WHERE rowid=?");
+      for (const row of rows) {
+        const converted = migrateProviderModelsToV10(String(row.models));
+        if (converted !== undefined) update.run(converted, Number(row.rowid));
+      }
+      db.exec("PRAGMA user_version = 10");
     });
   }
   ensureModelCredentialMetadataColumns(db);

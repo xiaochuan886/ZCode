@@ -16,6 +16,24 @@ export { Input } from "./components/ui/input.js";
 // 原生展示组件内的 ControlHintTooltip 依赖 TooltipProvider 上下文(原生 Root 内挂载,
 // 企业设置浮层在其外),导出供企业侧就近补挂。additive,原生用法不变。
 export { TooltipProvider } from "./components/ui/tooltip.js";
+// 企业模型目录复用的原生编辑器中间层(props 注入;注意 InlineEditableProviderCard
+// 内部经 ProviderModelsSection 调用 useServices,企业侧需用 ServiceProvider 注入
+// resolveModelConfig 桩):左侧导航 + 右侧详情编辑卡 + 协议选择/状态点/logo。
+// additive,原生用法不变。
+export { InlineEditableProviderCard } from "./settings/model-provider-section/InlineEditableProviderCard.js";
+export { ModelProviderSectionNavigation } from "./settings/model-provider-section/Navigation.js";
+export type {
+  ModelProviderNavGroup,
+  ModelProviderNavItem,
+} from "./settings/model-provider-section/constants.js";
+export type {
+  ProviderSettingsFormProvider,
+  ProviderSettingsFormModel,
+} from "./lib/providerSettingsFormTypes.js";
+export { ProviderApiFormatSelect } from "./settings/model-provider-section/ProviderApiFormatSelect.js";
+export { ProviderStatusIndicator } from "./settings/model-provider-section/ProviderStatusIndicator.js";
+export { ProviderLogo } from "./settings/model-provider-section/ProviderLogo.js";
+export { StatusDot } from "./settings/StatusDot.js";
 export { DesktopWindowFrame } from "./DesktopWindowFrame.js";
 export {
   AssistantCodeCommentFeatureProvider,

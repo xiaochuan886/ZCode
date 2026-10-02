@@ -9,6 +9,7 @@ import type {
   ModelProviderInput,
   ModelProviderPatch,
   ModelProviderTestResult,
+  EnterpriseModelMetadata,
   ModelProviderView,
   TenantCustomerAccessInput,
   TenantCustomerAccessUpdateResult,

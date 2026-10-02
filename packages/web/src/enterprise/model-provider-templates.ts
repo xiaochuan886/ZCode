@@ -1,11 +1,14 @@
 import type { ProviderSettingsTemplateView } from "@zcode/ui";
-import type { ModelApiType } from "./api.js";
+import type { EnterpriseModelMetadata, ModelApiType } from "./api.js";
 
 /**
- * 企业租户模型目录的新建模板(精选自官方内置 catalog 的 api-key 模板;
- * zcode-builtin.json 是运行时磁盘数据,浏览器侧无法静态取得,故企业侧维护这份清单)。
- * 原生 ProviderTemplatePicker 只读取 templateId 与 templateNameMap,
- * 预填字段(apiType/baseUrl/models)由本清单按 templateId 提供。
+ * 企业租户模型目录的新建模板(精选自官方内置 catalog 的 api-key 模板)。
+ * zcode-builtin.json 是运行时磁盘数据,浏览器侧无法静态取得,故企业侧维护这份清单;
+ * 原生 ProviderTemplatePicker 只读取 templateId 与 templateNameMap,预填字段由本清单提供。
+ *
+ * 每模型元数据(contextWindow/输入输出格式/工具调用)由官方 modelConfigRules
+ * (modelRules 默认与特定规则 + providerSiteRules 按 baseUrl/apiType 匹配)离线解析烘焙而来,
+ * 用于管理目录的模型行徽标展示;专家 runtime 侧元数据仍由其内置规则引擎自行解析。
  * 升级提示:跟随官方内置 catalog 变化同步维护。
  */
 export interface EnterpriseProviderTemplate {
@@ -14,212 +17,203 @@ export interface EnterpriseProviderTemplate {
   nameEn: string;
   apiType: ModelApiType;
   baseUrl: string;
-  models: string[];
+  models: EnterpriseModelMetadata[];
   apiKeyManagementUrl?: string;
 }
 
-/**
- * 模型清单以 CSV 常量承载:oxfmt 会把超长数组字面量逐行展开,18 个模板的全量清单
- * 展开后超过仓库 max-lines(400) 上限;字符串字面量不会被展开,清单内容与
- * ENTERPRISE_PROVIDER_TEMPLATES 的导出形状(models: string[])保持不变。
- */
-function csvModels(csv: string): string[] {
-  return csv
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item !== "");
-}
+/** 紧凑 JSON 常量:oxfmt 不会展开字符串,避免长数组撞 400 行文件上限。 */
+const RAW_TEMPLATES = [
+  '{"zai-standard-api":{"nameZh":"Z.ai API","nameEn":"Z.ai API","apiType":"openai-chat-completions","baseUrl":"https://api.z.ai/api/paas/v4","apiKeyManagementUrl":"https://z.ai/manage-apikey/apikey-list","models":[{"id":"GLM-5.3","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText"',
+  ':true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5.3-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5V-Turbo","contextWindow":200000,"inputFormat":{"supportsText":t',
+  'rue,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5.1","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":t',
+  'rue,"supportsJsonSchemaOutput":false},{"id":"GLM-5.1-Highspeed","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"sup',
+  'portsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5-Turbo","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOut',
+  'put":false},{"id":"GLM-4.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.7-FlashX","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supports',
+  'Audio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.7-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.',
+  '6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.5-Air","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":tr',
+  'ue},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6V","contextWindow":200000,"inputF',
+  'ormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6V-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsT',
+  'ext":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6V-FlashX","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.1V-Thinking-FlashX","contextWindow":200000,"inputFormat"',
+  ':{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.1V-Thinking-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"suppor',
+  'tsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4-FlashX-250414","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4-Flash-250414","contextWindow":200000,"inputFormat',
+  '":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4V-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":tr',
+  'ue},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"codegeex-4","contextWindow":131072,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"charglm-4","contextWindow":8192,"inputFormat":{"supportsText":true,"suppor',
+  'tsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"emohaa","contextWindow":8192,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJ',
+  'sonSchemaOutput":false}]},"bigmodel-standard-api":{"nameZh":"BigModel API","nameEn":"BigModel API","apiType":"openai-chat-completions","baseUrl":"https://open.bigmodel.cn/api/paas/v4","apiKeyManagementUrl":"https://bigmodel.cn/usercenter/proj-mgmt/apikeys","models":[{"id":"GLM-5.3","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio"',
+  ':true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5.3-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5V-Turbo',
+  '","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5.1","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"',
+  'outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5.1-Highspeed","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5","contextWindow":200000,"inpu',
+  'tFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-5-Turbo","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsTe',
+  'xt":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.7-FlashX","contextWindow":200000,"inputFormat":{"supportsText":tr',
+  'ue,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.7-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCa',
+  'll":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.5-Air","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"su',
+  'pportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput',
+  '":false},{"id":"GLM-4.6V","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6V-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAu',
+  'dio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.6V-FlashX","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.',
+  '1V-Thinking-FlashX","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4.1V-Thinking-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"support',
+  'sAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4-FlashX-250414","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":',
+  '"GLM-4-Flash-250414","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"GLM-4V-Flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":tr',
+  'ue,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"codegeex-4","contextWindow":131072,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"charglm-4","contex',
+  'tWindow":8192,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"emohaa","contextWindow":8192,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":',
+  '{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"moonshot-kimi":{"nameZh":"Kimi","nameEn":"Kimi","apiType":"anthropic-messages","baseUrl":"https://api.moonshot.cn/anthropic","apiKeyManagementUrl":"https://platform.kimi.com/console/api-keys","models":[{"id":"kimi-k3","contextWindow":1048576,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":fa',
+  'lse,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"kimi-k2.7-code","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}',
+  ',{"id":"kimi-k2.6","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"kimi-k2.7-code-highspeed","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"support',
+  'sAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"k3","contextWindow":1048576,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"k3-256k","conte',
+  'xtWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"minimax":{"nameZh":"MiniMax","nameEn":"MiniMax","apiType":"anthropic-messages","baseUrl":"https://api.minimaxi.com/anthropic","apiKeyManagementUrl":"https://platform',
+  '.minimaxi.com/console/access?tab=api-keys","models":[{"id":"MiniMax-M3","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2.7","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsI',
+  'mage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2.7-highspeed","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":',
+  'true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2.5","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2.5-highspeed","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImag',
+  'e":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2.1","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"support',
+  'sJsonSchemaOutput":false},{"id":"MiniMax-M2.1-highspeed","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"MiniMax-M2","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"suppo',
+  'rtsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"deepseek":{"nameZh":"DeepSeek","nameEn":"DeepSeek","apiType":"anthropic-messages","baseUrl":"https://api.deepseek.com/anthropic","apiKeyManagementUrl":"https://platform.deepseek.com/api_keys","models":[{"id":"deepseek-flash","contextWindow":1000',
+  '000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"deepseek-v4-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat',
+  '":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"qwen-alibaba-model-studio-cn":{"nameZh":"阿里云百炼（中国）","nameEn":"Alibaba Cloud (China)","apiType":"anthropic-messages","baseUrl":"https://dashscope.aliyuncs.com/apps/anthropic","apiKeyManagementUrl":"https://bailian.console.aliyun.com/cn-beijing?tab=model","models":[{"id":"qwen3.8-max","contextWindow":1000000,"inputF',
+  'ormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.8-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsTe',
+  'xt":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.7-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.7-plus","contextWindow":1000000,"inputFormat":{"supportsText":',
+  'true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.7-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsTool',
+  'Call":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.6-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.6-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage"',
+  ':false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.5-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supports',
+  'JsonSchemaOutput":false},{"id":"qwen3.5-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3-max","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":',
+  'false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{',
+  '"id":"qwen-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3-vl-plus","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":tru',
+  'e,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"qwen-alibaba-model-studio-intl":{"nameZh":"阿里云百炼（国际）","nameEn":"Alibaba Cloud (Global)","apiType":"openai-chat-completions","baseUrl":"https://dashscope-intl.aliyuncs.com/compatible-mode/v1","apiKeyManagementUrl":"https://modelstudio.console.aliyun.com/ap-southeast-1?tab=dashboar',
+  'd","models":[{"id":"qwen3.8-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.8-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"sup',
+  'portsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.8-omni-flash","contextWindow":65536,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id"',
+  ':"qwen3.7-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.7-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"s',
+  'upportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.7-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.6-plus","conte',
+  'xtWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.6-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"',
+  'outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.5-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.5-flash","contextWindow":1000000,',
+  '"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3-max","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"support',
+  'sText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen-flash","contextWindow":1000000,"inputFormat":{"supportsText"',
+  ':true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3-vl-plus","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToo',
+  'lCall":true,"supportsJsonSchemaOutput":false}]},"xiaomi-mimo":{"nameZh":"Xiaomi MiMo","nameEn":"Xiaomi MiMo","apiType":"anthropic-messages","baseUrl":"https://api.xiaomimimo.com/anthropic","apiKeyManagementUrl":"https://platform.xiaomimimo.com/","models":[{"id":"mimo-v2.5-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":tru',
+  'e,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"mimo-v2.5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"openai":{"nameZh":"Open',
+  'AI","nameEn":"OpenAI","apiType":"openai-responses","baseUrl":"https://api.openai.com/v1","apiKeyManagementUrl":"https://platform.openai.com/api-keys","models":[{"id":"gpt-6-astra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSc',
+  'hemaOutput":true},{"id":"gpt-5.6-sol","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.6-terra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false',
+  ',"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.6-luna","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id"',
+  ':"gpt-5.6","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPd',
+  'f":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-pro","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-mini","contextWindow":40',
+  '0000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-nano","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"',
+  'supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.3-codex","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"anthropic":{"nameZh":"Anthropic","nameEn":"Anthropic","apiTyp',
+  'e":"anthropic-messages","baseUrl":"https://api.anthropic.com/v1","apiKeyManagementUrl":"https://console.anthropic.com/settings/keys","models":[{"id":"claude-fable-5-1","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":',
+  'true},{"id":"claude-fable-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-opus-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"support',
+  'sAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-sonnet-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"clau',
+  'de-haiku-4-5-20251001","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"xai":{"nameZh":"xAI","nameEn":"xAI","apiType":"openai-responses","baseUrl":"https://api.x.ai/v1","apiKeyManagementUrl":"https://console.x',
+  '.ai","models":[{"id":"grok-4.6","contextWindow":500000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"grok-build-0.1","contextWindow":256000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"suppo',
+  'rtsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"grok-4.3","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"openrouter":{',
+  '"nameZh":"OpenRouter","nameEn":"OpenRouter","apiType":"anthropic-messages","baseUrl":"https://openrouter.ai/api","apiKeyManagementUrl":"https://openrouter.ai/keys","models":[{"id":"anthropic/claude-fable-5.1","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsT',
+  'oolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-6-astra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.6-sol","contextWindow":1050000,"inputFormat":{"supportsText":true,"s',
+  'upportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"anthropic/claude-opus-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsT',
+  'oolCall":true,"supportsJsonSchemaOutput":true},{"id":"deepseek/deepseek-v4-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"moonshotai/kimi-k3","contextWindow":1048576,"inputFormat":{"supportsText":',
+  'true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5.3","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsTool',
+  'Call":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3.8-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"minimax/minimax-m3","contextWindow":200000,"inputFormat":{"supportsText":true,"suppor',
+  'tsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"xiaomi/mimo-v2.5-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall',
+  '":true,"supportsJsonSchemaOutput":false},{"id":"x-ai/grok-4.6","contextWindow":500000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"deepseek/deepseek-v4.1-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"sup',
+  'portsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3.8-max-0902","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsTool',
+  'Call":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.6-terra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.6-luna","contextWindow":1050000,"inputFormat":{"supportsText":true,"s',
+  'upportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.6","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":',
+  'true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.4","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.4-pro","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage"',
+  ':false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.4-mini","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"sup',
+  'portsJsonSchemaOutput":true},{"id":"openai/gpt-5.4-nano","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"openai/gpt-5.3-codex","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":fal',
+  'se,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"anthropic/claude-sonnet-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"',
+  'supportsJsonSchemaOutput":true},{"id":"anthropic/claude-haiku-4.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"anthropic/claude-opus-4.8","contextWindow":200000,"inputFormat":{"supportsText":true,"sup',
+  'portsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"anthropic/claude-opus-4.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsT',
+  'oolCall":true,"supportsJsonSchemaOutput":false},{"id":"anthropic/claude-opus-4.6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"anthropic/claude-opus-4.5","contextWindow":200000,"inputFormat":{"support',
+  'sText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"anthropic/claude-sonnet-4.6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText',
+  '":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"anthropic/claude-sonnet-4.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"deepseek/deepseek-v4-flash","contextWindow":1000000,"',
+  'inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"moonshotai/kimi-k2.7-code","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFo',
+  'rmat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"moonshotai/kimi-k2.6","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"moonshotai/kimi-k2.5","contextWindow":26',
+  '2144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5.3-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFo',
+  'rmat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5.2","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5.1","contextWindow":200000,"inputForma',
+  't":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5v-turbo","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsTe',
+  'xt":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-5-turbo","contextWindow":200000,"inputFormat":{"supportsTex',
+  't":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsTo',
+  'olCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.7-flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.6","contextWindow":200000,"inputFormat":{"supportsText":true,"supports',
+  'Image":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.6v","contextWindow":131072,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"su',
+  'pportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.5-air","contextWindow":131072,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"z-ai/glm-4.5","contextWindow":131072,"inputFormat":{"supportsText":true,"supportsImage":false,"supp',
+  'ortsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3.8-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSc',
+  'hemaOutput":true},{"id":"qwen/qwen3.7-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen/qwen3.7-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVid',
+  'eo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen/qwen3.7-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutp',
+  'ut":false},{"id":"qwen/qwen3.6-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3.6-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":',
+  'false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3.5-plus-20260420","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchem',
+  'aOutput":false},{"id":"qwen/qwen3-vl-plus","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen/qwen3-vl-flash","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVi',
+  'deo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"minimax/minimax-m2.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaO',
+  'utput":false},{"id":"minimax/minimax-m2.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"xiaomi/mimo-v2.5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVide',
+  'o":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"x-ai/grok-build-0.1","contextWindow":256000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutp',
+  'ut":true},{"id":"x-ai/grok-4.3","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"opencode-go-chat":{"nameZh":"OpenCode Go (Chat)","nameEn":"OpenCode Go (Chat)","apiType":"openai-chat-completions","baseUrl":"h',
+  'ttps://opencode.ai/zen/go/v1","apiKeyManagementUrl":"https://opencode.ai/auth","models":[{"id":"glm-5.3-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"glm-5.3","contextWindow":1000000,"inputForma',
+  't":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"kimi-k3","contextWindow":1048576,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},',
+  '"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"kimi-k2.7-code","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"deepseek-v4.1-flash","contextWindow":1000000,"inputFormat":{"supportsText":t',
+  'rue,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"deepseek-v4-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToo',
+  'lCall":true,"supportsJsonSchemaOutput":true},{"id":"mimo-v2.5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"mimo-v2.5-pro","contextWindow":1048576,"inputFormat":{"supportsText":true,"supportsImage":f',
+  'alse,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"glm-5.2","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSch',
+  'emaOutput":true},{"id":"glm-5.1","contextWindow":202752,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"kimi-k2.6","contextWindow":262144,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supports',
+  'Audio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"deepseek-v4-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"de',
+  'epseek-v4-flash-vision-exp","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"hy4-preview","contextWindow":1024000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAu',
+  'dio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"hy3","contextWindow":256000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"opencode-go-messages":',
+  '{"nameZh":"OpenCode Go (Anthropic)","nameEn":"OpenCode Go (Anthropic)","apiType":"anthropic-messages","baseUrl":"https://opencode.ai/zen/go/v1","apiKeyManagementUrl":"https://opencode.ai/auth","models":[{"id":"minimax-m3","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":tru',
+  'e},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.8-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.8-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,',
+  '"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"minimax-m2.7","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":t',
+  'rue,"supportsJsonSchemaOutput":false},{"id":"minimax-m2.5","contextWindow":204800,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.7-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"s',
+  'upportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.7-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchem',
+  'aOutput":false},{"id":"qwen3.6-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]},"opencode-go-responses":{"nameZh":"OpenCode Go (Responses)","nameEn":"OpenCode Go (Responses)","apiType":"openai-responses',
+  '","baseUrl":"https://opencode.ai/zen/go/v1","apiKeyManagementUrl":"https://opencode.ai/auth","models":[{"id":"gpt-5.6-luna","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"grok-4.6","contextWindow":50000',
+  '0,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"opencode-zen-responses":{"nameZh":"OpenCode Zen (Responses)","nameEn":"OpenCode Zen (Responses)","apiType":"openai-responses","baseUrl":"https://opencode.ai/zen/v1","apiKeyManagemen',
+  'tUrl":"https://opencode.ai/auth","models":[{"id":"gpt-6-astra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.6-sol","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":fals',
+  'e,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.6-terra","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonS',
+  'chemaOutput":true},{"id":"gpt-5.6-luna","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"sup',
+  'portsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"gpt-5.5-pro","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"gpt',
+  '-5.4","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-pro","contextWindow":1050000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf',
+  '":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-mini","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.4-nano","contextWindow":400',
+  '000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.3-codex","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"',
+  'supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.3-codex-spark","contextWindow":400000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"gpt-5.2","contextWindow":200000,"inputFormat":{"sup',
+  'portsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"gpt-5.1","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"support',
+  'sToolCall":true,"supportsJsonSchemaOutput":false}]},"opencode-zen-messages":{"nameZh":"OpenCode Zen (Anthropic)","nameEn":"OpenCode Zen (Anthropic)","apiType":"anthropic-messages","baseUrl":"https://opencode.ai/zen/v1","apiKeyManagementUrl":"https://opencode.ai/auth","models":[{"id":"claude-fable-5-1","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":',
+  'false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-fable-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true',
+  '},{"id":"qwen3.7-max","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"qwen3.6-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":',
+  'true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.5-plus","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-opus-5',
+  '","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-sonnet-5","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf',
+  '":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-haiku-4-5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true},{"id":"claude-opus-4-8","contextWind',
+  'ow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-opus-4-7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"output',
+  'Format":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-opus-4-6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-opus-4-5","contextWindow":200000,"in',
+  'putFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-sonnet-4-6","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"su',
+  'pportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"claude-sonnet-4-5","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"qwen3.7-plus","contextWindow":1000000,"inputFormat":{',
+  '"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":true}]},"opencode-zen-chat":{"nameZh":"OpenCode Zen (Chat)","nameEn":"OpenCode Zen (Chat)","apiType":"openai-chat-completions","baseUrl":"https://opencode.ai/zen/v1","apiKeyManagementUrl":"https://opencode.a',
+  'i/auth","models":[{"id":"kimi-k3","contextWindow":1048576,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"minimax-m3","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"suppo',
+  'rtsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"deepseek-v4-pro","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"',
+  'glm-5.2","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"big-pickle","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPd',
+  'f":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"mimo-v2.5-free","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"hy3-free","contextWindow":2',
+  '00000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"ling-3.0-flash-fin-free","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"out',
+  'putFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"nemotron-3-ultra-free","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"muse-spark-1.2-contributor-free","',
+  'contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"minimax-m2.7","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true}',
+  ',"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"deepseek-v4-flash","contextWindow":1000000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"glm-5.1","contextWindow":200000,',
+  '"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outputFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false},{"id":"nemotron-3.5-lightning-free","contextWindow":200000,"inputFormat":{"supportsText":true,"supportsImage":false,"supportsVideo":false,"supportsAudio":true,"supportsPdf":true},"outpu',
+  'tFormat":{"supportsText":true},"supportsToolCall":true,"supportsJsonSchemaOutput":false}]}}',
+].join("");
 
-export const ENTERPRISE_PROVIDER_TEMPLATES: EnterpriseProviderTemplate[] = [
-  {
-    templateId: "zai-standard-api",
-    nameZh: "Z.ai API",
-    nameEn: "Z.ai API",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://api.z.ai/api/paas/v4",
-    models: csvModels(
-      "GLM-5.3, GLM-5.3-Flash, GLM-5V-Turbo, GLM-5.1, GLM-5.1-Highspeed, GLM-5, GLM-5-Turbo, GLM-4.7, GLM-4.7-FlashX, GLM-4.7-Flash, GLM-4.6, GLM-4.5-Air, GLM-4.5, GLM-4.6V, GLM-4.6V-Flash, GLM-4.6V-FlashX, GLM-4.1V-Thinking-FlashX, GLM-4.1V-Thinking-Flash, GLM-4-FlashX-250414, GLM-4-Flash-250414, GLM-4V-Flash, codegeex-4, charglm-4, emohaa",
-    ),
-    apiKeyManagementUrl: "https://z.ai/manage-apikey/apikey-list",
-  },
-  {
-    templateId: "bigmodel-standard-api",
-    nameZh: "BigModel API",
-    nameEn: "BigModel API",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    models: csvModels(
-      "GLM-5.3, GLM-5.3-Flash, GLM-5V-Turbo, GLM-5.1, GLM-5.1-Highspeed, GLM-5, GLM-5-Turbo, GLM-4.7, GLM-4.7-FlashX, GLM-4.7-Flash, GLM-4.6, GLM-4.5-Air, GLM-4.5, GLM-4.6V, GLM-4.6V-Flash, GLM-4.6V-FlashX, GLM-4.1V-Thinking-FlashX, GLM-4.1V-Thinking-Flash, GLM-4-FlashX-250414, GLM-4-Flash-250414, GLM-4V-Flash, codegeex-4, charglm-4, emohaa",
-    ),
-    apiKeyManagementUrl: "https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
-  },
-  {
-    templateId: "moonshot-kimi",
-    nameZh: "Kimi",
-    nameEn: "Kimi",
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.moonshot.cn/anthropic",
-    models: csvModels("kimi-k3, kimi-k2.7-code, kimi-k2.6, kimi-k2.7-code-highspeed, k3, k3-256k"),
-    apiKeyManagementUrl: "https://platform.kimi.com/console/api-keys",
-  },
-  {
-    templateId: "minimax",
-    nameZh: "MiniMax",
-    nameEn: "MiniMax",
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.minimaxi.com/anthropic",
-    models: csvModels(
-      "MiniMax-M3, MiniMax-M2.7, MiniMax-M2.7-highspeed, MiniMax-M2.5, MiniMax-M2.5-highspeed, MiniMax-M2.1, MiniMax-M2.1-highspeed, MiniMax-M2",
-    ),
-    apiKeyManagementUrl: "https://platform.minimaxi.com/console/access?tab=api-keys",
-  },
-  {
-    templateId: "deepseek",
-    nameZh: "DeepSeek",
-    nameEn: "DeepSeek",
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.deepseek.com/anthropic",
-    models: csvModels("deepseek-flash, deepseek-v4-pro"),
-    apiKeyManagementUrl: "https://platform.deepseek.com/api_keys",
-  },
-  {
-    templateId: "qwen-alibaba-model-studio-cn",
-    nameZh: "阿里云百炼（中国）",
-    nameEn: "Alibaba Cloud (China)",
-    apiType: "anthropic-messages",
-    baseUrl: "https://dashscope.aliyuncs.com/apps/anthropic",
-    models: csvModels(
-      "qwen3.8-max, qwen3.8-flash, qwen3.7-max, qwen3.7-plus, qwen3.7-flash, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, qwen3.5-flash, qwen3-max, qwen-plus, qwen-flash, qwen3-vl-plus",
-    ),
-    apiKeyManagementUrl: "https://bailian.console.aliyun.com/cn-beijing?tab=model",
-  },
-  {
-    templateId: "qwen-alibaba-model-studio-intl",
-    nameZh: "阿里云百炼（国际）",
-    nameEn: "Alibaba Cloud (Global)",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    models: csvModels(
-      "qwen3.8-max, qwen3.8-flash, qwen3.8-omni-flash, qwen3.7-max, qwen3.7-plus, qwen3.7-flash, qwen3.6-plus, qwen3.6-flash, qwen3.5-plus, qwen3.5-flash, qwen3-max, qwen-plus, qwen-flash, qwen3-vl-plus",
-    ),
-    apiKeyManagementUrl: "https://modelstudio.console.aliyun.com/ap-southeast-1?tab=dashboard",
-  },
-  {
-    templateId: "xiaomi-mimo",
-    nameZh: "Xiaomi MiMo",
-    nameEn: "Xiaomi MiMo",
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.xiaomimimo.com/anthropic",
-    models: csvModels("mimo-v2.5-pro, mimo-v2.5"),
-    apiKeyManagementUrl: "https://platform.xiaomimimo.com/",
-  },
-  {
-    templateId: "openai",
-    nameZh: "OpenAI",
-    nameEn: "OpenAI",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://api.openai.com/v1",
-    models: csvModels(
-      "gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.6, gpt-5.4, gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex",
-    ),
-    apiKeyManagementUrl: "https://platform.openai.com/api-keys",
-  },
-  {
-    templateId: "anthropic",
-    nameZh: "Anthropic",
-    nameEn: "Anthropic",
-    apiType: "anthropic-messages",
-    baseUrl: "https://api.anthropic.com/v1",
-    models: csvModels(
-      "claude-fable-5-1, claude-fable-5, claude-opus-5, claude-sonnet-5, claude-haiku-4-5-20251001",
-    ),
-    apiKeyManagementUrl: "https://console.anthropic.com/settings/keys",
-  },
-  {
-    templateId: "xai",
-    nameZh: "xAI",
-    nameEn: "xAI",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://api.x.ai/v1",
-    models: csvModels("grok-4.6, grok-build-0.1, grok-4.3"),
-    apiKeyManagementUrl: "https://console.x.ai",
-  },
-  {
-    templateId: "openrouter",
-    nameZh: "OpenRouter",
-    nameEn: "OpenRouter",
-    apiType: "anthropic-messages",
-    baseUrl: "https://openrouter.ai/api",
-    models: csvModels(
-      "anthropic/claude-fable-5.1, openai/gpt-6-astra, openai/gpt-5.6-sol, anthropic/claude-opus-5, deepseek/deepseek-v4-pro, moonshotai/kimi-k3, z-ai/glm-5.3, qwen/qwen3.8-max, minimax/minimax-m3, xiaomi/mimo-v2.5-pro, x-ai/grok-4.6, deepseek/deepseek-v4.1-flash, qwen/qwen3.8-max-0902, openai/gpt-5.6-terra, openai/gpt-5.6-luna, openai/gpt-5.6, openai/gpt-5.4, openai/gpt-5.4-pro, openai/gpt-5.4-mini, openai/gpt-5.4-nano, openai/gpt-5.3-codex, anthropic/claude-sonnet-5, anthropic/claude-haiku-4.5, anthropic/claude-opus-4.8, anthropic/claude-opus-4.7, anthropic/claude-opus-4.6, anthropic/claude-opus-4.5, anthropic/claude-sonnet-4.6, anthropic/claude-sonnet-4.5, deepseek/deepseek-v4-flash, moonshotai/kimi-k2.7-code, moonshotai/kimi-k2.6, moonshotai/kimi-k2.5, z-ai/glm-5.3-flash, z-ai/glm-5.2, z-ai/glm-5.1, z-ai/glm-5v-turbo, z-ai/glm-5, z-ai/glm-5-turbo, z-ai/glm-4.7, z-ai/glm-4.7-flash, z-ai/glm-4.6, z-ai/glm-4.6v, z-ai/glm-4.5-air, z-ai/glm-4.5, qwen/qwen3.8-flash, qwen/qwen3.7-max, qwen/qwen3.7-plus, qwen/qwen3.7-flash, qwen/qwen3.6-plus, qwen/qwen3.6-flash, qwen/qwen3.5-plus-20260420, qwen/qwen3-vl-plus, qwen/qwen3-vl-flash, minimax/minimax-m2.7, minimax/minimax-m2.5, xiaomi/mimo-v2.5, x-ai/grok-build-0.1, x-ai/grok-4.3",
-    ),
-    apiKeyManagementUrl: "https://openrouter.ai/keys",
-  },
-  {
-    templateId: "opencode-go-chat",
-    nameZh: "OpenCode Go (Chat)",
-    nameEn: "OpenCode Go (Chat)",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://opencode.ai/zen/go/v1",
-    models: csvModels(
-      "glm-5.3-flash, glm-5.3, kimi-k3, kimi-k2.7-code, deepseek-v4.1-flash, deepseek-v4-pro, mimo-v2.5, mimo-v2.5-pro, glm-5.2, glm-5.1, kimi-k2.6, deepseek-v4-flash, deepseek-v4-flash-vision-exp, hy4-preview, hy3",
-    ),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-  {
-    templateId: "opencode-go-messages",
-    nameZh: "OpenCode Go (Anthropic)",
-    nameEn: "OpenCode Go (Anthropic)",
-    apiType: "anthropic-messages",
-    baseUrl: "https://opencode.ai/zen/go/v1",
-    models: csvModels(
-      "minimax-m3, qwen3.8-max, qwen3.8-flash, minimax-m2.7, minimax-m2.5, qwen3.7-max, qwen3.7-plus, qwen3.6-plus",
-    ),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-  {
-    templateId: "opencode-go-responses",
-    nameZh: "OpenCode Go (Responses)",
-    nameEn: "OpenCode Go (Responses)",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://opencode.ai/zen/go/v1",
-    models: csvModels("gpt-5.6-luna, grok-4.6"),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-  {
-    templateId: "opencode-zen-responses",
-    nameZh: "OpenCode Zen (Responses)",
-    nameEn: "OpenCode Zen (Responses)",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://opencode.ai/zen/v1",
-    models: csvModels(
-      "gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.5-pro, gpt-5.4, gpt-5.4-pro, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.2, gpt-5.1",
-    ),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-  {
-    templateId: "opencode-zen-messages",
-    nameZh: "OpenCode Zen (Anthropic)",
-    nameEn: "OpenCode Zen (Anthropic)",
-    apiType: "anthropic-messages",
-    baseUrl: "https://opencode.ai/zen/v1",
-    models: csvModels(
-      "claude-fable-5-1, claude-fable-5, qwen3.7-max, qwen3.6-plus, qwen3.5-plus, claude-opus-5, claude-sonnet-5, claude-haiku-4-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-opus-4-5, claude-sonnet-4-6, claude-sonnet-4-5, qwen3.7-plus",
-    ),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-  {
-    templateId: "opencode-zen-chat",
-    nameZh: "OpenCode Zen (Chat)",
-    nameEn: "OpenCode Zen (Chat)",
-    apiType: "openai-chat-completions",
-    baseUrl: "https://opencode.ai/zen/v1",
-    models: csvModels(
-      "kimi-k3, minimax-m3, deepseek-v4-pro, glm-5.2, big-pickle, mimo-v2.5-free, hy3-free, ling-3.0-flash-fin-free, nemotron-3-ultra-free, muse-spark-1.2-contributor-free, minimax-m2.7, deepseek-v4-flash, glm-5.1, nemotron-3.5-lightning-free",
-    ),
-    apiKeyManagementUrl: "https://opencode.ai/auth",
-  },
-];
+type RawTemplate = Omit<EnterpriseProviderTemplate, "models" | "apiKeyManagementUrl"> & {
+  models: EnterpriseModelMetadata[];
+  apiKeyManagementUrl?: string;
+};
+
+// 修复依据:紧凑 JSON 的顶层形状是「templateId → 模板」字典(每条不重复携带 templateId),
+// 原写法把 JSON.parse 结果直接 as 数组,运行时在模块加载处抛 "TEMPLATES.map is not a function",
+// 整个模型 tab 连同所有导入方一起崩溃。这里按键回填 templateId,数据与导出契约不变。
+const TEMPLATES: RawTemplate[] = Object.entries(
+  JSON.parse(RAW_TEMPLATES) as Record<string, Omit<RawTemplate, "templateId">>,
+).map(([templateId, template]) => ({ ...template, templateId }));
+
+export const ENTERPRISE_PROVIDER_TEMPLATES: EnterpriseProviderTemplate[] = TEMPLATES.map(
+  (template) => ({
+    templateId: template.templateId,
+    nameZh: template.nameZh,
+    nameEn: template.nameEn,
+    apiType: template.apiType,
+    baseUrl: template.baseUrl,
+    models: template.models,
+    ...(template.apiKeyManagementUrl ? { apiKeyManagementUrl: template.apiKeyManagementUrl } : {}),
+  }),
+);
 
 /** 喂给原生 ProviderTemplatePicker 的视图:config 不被选择器消费,留空对象即可。 */
 export function enterprisePickerTemplates(): ProviderSettingsTemplateView[] {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, test } from "node:test";
 import { ModelCredentialCipher } from "../src/model-credential-format.js";
+import type { TenantModelProviderInput } from "../src/provider-format.js";
 import { EnterpriseStore } from "../src/store.js";
 
 test("tenant boundaries, memberships and admin-only updates", async () => {
@@ -127,7 +128,8 @@ test("v4 migration drops the legacy per-case schema and keeps customer rows", as
         .prepare("PRAGMA user_version")
         .get().user_version,
     );
-    assert.equal(version, 9);
+    // v9 之后链上还有 v10(models 富条目行内迁移),迁移链末尾 user_version 为 10。
+    assert.equal(version, 10);
     const customers = migrated.listCustomers(user.id, tenant.id);
     assert.equal(customers.length, 1);
     assert.equal(customers[0]!.id, customer.id);
@@ -341,8 +343,9 @@ test("v7 migration creates catalog tables on a fresh database", async () => {
       raw.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>
     ).map((column) => column.name);
     raw.close();
-    // v9 之后全新库基线即 v9:目录表、每用户授权表与客户可见性授权表一次到位。
-    assert.equal(version, 9);
+    // v10 之后全新库基线即 v10:目录表、每用户授权表与客户可见性授权表一次到位
+    // (models 列写入方直接产出富条目形状,无需迁移)。
+    assert.equal(version, 10);
     assert.equal(tables.has("tenant_model_providers"), true);
     assert.equal(tables.has("tenant_mcp_connectors"), true);
     assert.equal(tables.has("user_mcp_connector_authorizations"), true);
@@ -435,7 +438,8 @@ test("v7 migration seeds the provider catalog from the legacy single credential"
     assert.equal(providers[0]!.isDefault, true);
     assert.equal(providers[0]!.enabled, true);
     assert.equal(providers[0]!.apiKeyLast4, "1234");
-    assert.deepEqual(providers[0]!.models, ["legacy-model"]);
+    // v10 迁移后 models 投影为富条目对象数组(该测试库经 v6→v10 全链迁移)。
+    assert.deepEqual(providers[0]!.models, [{ id: "legacy-model" }]);
     assert.equal(providers[0]!.defaultModel, "legacy-model");
     assert.equal(JSON.stringify(providers[0]).includes(secret), false);
     const distribution = migrated.tenantModelProvidersForDistribution(seeded.tenant.id);
@@ -596,7 +600,8 @@ test("tenant model provider catalog is admin-gated, encrypted at rest and keeps 
       defaultModel: "beta-b",
     });
     assert.equal(rotated.apiKeyLast4, "3333");
-    assert.deepEqual(rotated.models, ["beta-a", "beta-b"]);
+    // v10 投影形状:富条目对象数组;纯字符串输入归一化为 {id}(enabled 缺省即启用)。
+    assert.deepEqual(rotated.models, [{ id: "beta-a" }, { id: "beta-b" }]);
     assert.equal(rotated.defaultModel, "beta-b");
 
     // 停用的供应商不进分发集合。
@@ -645,6 +650,203 @@ test("tenant model provider catalog is admin-gated, encrypted at rest and keeps 
     } catch {
       // The test closes the store before inspecting SQLite directly.
     }
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("v10 migration converts legacy string model lists in place and stays idempotent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-v10-models-"));
+  const dbPath = join(dir, "enterprise.db");
+  const workspaces = join(dir, "workspaces");
+  const store = await EnterpriseStore.open(dbPath, workspaces, {
+    modelCredentialsEncryptionKey: catalogEncryptionKey,
+  });
+  const { tenant, user } = store.bootstrapAdmin("V10", "v10@example.test", "hash");
+  store.createTenantModelProvider(user.id, tenant.id, {
+    providerKey: "legacy",
+    displayName: "Legacy catalog",
+    apiType: "anthropic-messages",
+    baseUrl: "https://legacy.example.com",
+    apiKey: "legacy-key-0000",
+    models: ["legacy-a", "legacy-b", "legacy-c"],
+    defaultModel: "legacy-b",
+  });
+  store.close();
+
+  // 回退成 v9 形态:models 列写回纯字符串数组 JSON,模拟尚未升级的存量库。
+  let raw = new DatabaseSync(dbPath);
+  raw.exec(`
+    UPDATE tenant_model_providers SET models='["legacy-a","legacy-b","legacy-c"]';
+    PRAGMA user_version = 9;
+  `);
+  raw.close();
+
+  const migrated = await EnterpriseStore.open(dbPath, workspaces, {
+    modelCredentialsEncryptionKey: catalogEncryptionKey,
+  });
+  let remigrated: EnterpriseStore | undefined;
+  try {
+    raw = new DatabaseSync(dbPath);
+    assert.equal(
+      (raw.prepare("PRAGMA user_version").get() as Record<string, unknown>).user_version,
+      10,
+    );
+    raw.close();
+    // 原位转换:条目为 {id} 形状,id 顺序与默认模型语义不变。
+    const providers = migrated.listTenantModelProviders(user.id, tenant.id);
+    assert.deepEqual(providers[0]!.models, [
+      { id: "legacy-a" },
+      { id: "legacy-b" },
+      { id: "legacy-c" },
+    ]);
+    assert.equal(providers[0]!.defaultModel, "legacy-b");
+
+    // 幂等防御:已是对象数组的行再次经历 v9→v10(版本被手工回拨)不被二次包装。
+    raw = new DatabaseSync(dbPath);
+    raw.exec(`
+      UPDATE tenant_model_providers SET models='[{"id":"legacy-a"},{"id":"legacy-b"},{"id":"legacy-c"}]';
+      PRAGMA user_version = 9;
+    `);
+    raw.close();
+    remigrated = await EnterpriseStore.open(dbPath, workspaces, {
+      modelCredentialsEncryptionKey: catalogEncryptionKey,
+    });
+    assert.deepEqual(remigrated.listTenantModelProviders(user.id, tenant.id)[0]!.models, [
+      { id: "legacy-a" },
+      { id: "legacy-b" },
+      { id: "legacy-c" },
+    ]);
+  } finally {
+    migrated.close();
+    remigrated?.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("rich model entries roundtrip, normalize string input and reject malformed metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "zcode-enterprise-rich-models-"));
+  const dbPath = join(dir, "enterprise.db");
+  const store = await EnterpriseStore.open(dbPath, join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: catalogEncryptionKey,
+  });
+  try {
+    const { tenant, user } = store.bootstrapAdmin("Rich", "rich@example.test", "hash");
+    const full = {
+      id: "deepseek-flash",
+      enabled: false,
+      contextWindow: 128000,
+      inputFormat: {
+        supportsText: true,
+        supportsImage: true,
+        supportsVideo: false,
+        supportsAudio: false,
+        supportsPdf: true,
+      },
+      outputFormat: { supportsText: true },
+      supportsToolCall: true,
+      supportsJsonSchemaOutput: true,
+    };
+    // 混合输入:富条目 + enabled:true 条目 + 纯字符串(向后兼容归一化为 {id})。
+    const created = store.createTenantModelProvider(user.id, tenant.id, {
+      providerKey: "rich",
+      displayName: "Rich AI",
+      apiType: "openai-responses",
+      baseUrl: "https://rich.example.com/v1",
+      apiKey: "rich-key-4321",
+      models: [full, { id: "plain-entry", enabled: true }, "legacy-string"],
+      defaultModel: "legacy-string",
+    });
+    // enabled 存储约定:只有显式 false 才落库,enabled:true 归一化为省略键。
+    assert.deepEqual(created.models, [full, { id: "plain-entry" }, { id: "legacy-string" }]);
+    assert.equal(created.defaultModel, "legacy-string");
+    assert.equal(created.apiType, "openai-responses");
+    // 分发集合原样携带条目(含 enabled:false):排除发生在 model-provision 层。
+    assert.deepEqual(store.tenantModelProvidersForDistribution(tenant.id)[0]!.models, [
+      full,
+      { id: "plain-entry" },
+      { id: "legacy-string" },
+    ]);
+
+    // patch 往返:整体替换条目集(默认模型同步换到新集合内)。
+    const patched = store.updateTenantModelProvider(user.id, created.id, {
+      models: ["patch-only"],
+      defaultModel: "patch-only",
+    });
+    assert.deepEqual(patched.models, [{ id: "patch-only" }]);
+    assert.equal(patched.defaultModel, "patch-only");
+
+    // defaultModel 仍必须在条目 id 集合内(富条目语义不变)。
+    assert.throws(
+      () =>
+        store.updateTenantModelProvider(user.id, created.id, {
+          models: [{ id: "a" }, { id: "b" }],
+          defaultModel: "missing",
+        }),
+      /validation/,
+    );
+
+    // 未知元数据键与坏类型一律 400 validation。
+    const rejectionInput = (models: unknown): TenantModelProviderInput => ({
+      providerKey: "reject",
+      displayName: "Reject",
+      apiType: "openai-responses",
+      baseUrl: "https://reject.example.com",
+      apiKey: "reject-key",
+      models: models as never,
+    });
+    const malformed: unknown[] = [
+      [{ id: "x", unknownKey: true }],
+      [{ id: "x", contextWindow: "big" }],
+      [{ id: "x", contextWindow: 0 }],
+      [{ id: "x", contextWindow: -1 }],
+      [{ id: "x", enabled: "yes" }],
+      [{ id: "x", supportsToolCall: 1 }],
+      [{ id: "x", inputFormat: { supportsText: true } }],
+      [
+        {
+          id: "x",
+          inputFormat: {
+            supportsText: true,
+            supportsImage: false,
+            supportsVideo: false,
+            supportsAudio: false,
+            supportsPdf: false,
+            supportsExtra: true,
+          },
+        },
+      ],
+      [{ id: "x", outputFormat: { supportsText: true, supportsImage: true } }],
+      [42],
+      [{ contextWindow: 128000 }],
+      ["a", { id: "a" }],
+    ];
+    for (const models of malformed) {
+      assert.throws(
+        () => store.createTenantModelProvider(user.id, tenant.id, rejectionInput(models)),
+        /validation/,
+        `models=${JSON.stringify(models)} should be rejected`,
+      );
+    }
+    // 条目数上限 64:第 65 个条目拒绝。
+    assert.throws(
+      () =>
+        store.createTenantModelProvider(
+          user.id,
+          tenant.id,
+          rejectionInput(Array.from({ length: 65 }, (_, index) => `m-${index}`)),
+        ),
+      /validation/,
+    );
+
+    // 密文落盘校验:models 列以富条目对象数组形状持久化。
+    const raw = new DatabaseSync(dbPath);
+    const rows = raw
+      .prepare("SELECT models FROM tenant_model_providers WHERE provider_key='rich'")
+      .all() as Array<{ models: string }>;
+    raw.close();
+    assert.deepEqual(JSON.parse(rows[0]!.models), [{ id: "patch-only" }]);
+  } finally {
+    store.close();
     await rm(dir, { recursive: true, force: true });
   }
 });

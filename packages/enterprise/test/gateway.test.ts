@@ -510,6 +510,72 @@ test("tenant model provider catalog API is admin-gated and never returns keys", 
       ["acme"],
     );
     assert.equal(afterDelete[0]!.isDefault, true);
+
+    // 第三协议 openai-responses:可创建(富条目元数据随目录往返),连接测试与
+    // OpenAI 路径完全一致——Bearer 头请求 {baseUrl}/models 并解析 data[].id。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
+      {
+        providerKey: "gamma",
+        displayName: "Gamma AI",
+        apiType: "openai-responses",
+        baseUrl: "https://gamma.example.com/v1",
+        apiKey: "gamma-secret-7777",
+        models: [{ id: "gamma-a", contextWindow: 200000 }],
+      },
+    );
+    assert.equal(response.status, 201);
+    const gamma = (await response.json()) as Record<string, unknown>;
+    assert.equal(gamma.apiType, "openai-responses");
+    assert.deepEqual(gamma.models, [{ id: "gamma-a", contextWindow: 200000 }]);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/model-providers/${gamma.id as string}/test`,
+      "POST",
+      {},
+    );
+    assert.equal(response.status, 200);
+    const gammaResult = (await response.json()) as { ok: boolean; models?: string[] };
+    assert.equal(gammaResult.ok, true);
+    assert.deepEqual(gammaResult.models, ["listed-model"]);
+    assert.equal(testedUrl, "https://gamma.example.com/v1/models");
+    assert.equal(testedHeaders.authorization, "Bearer gamma-secret-7777");
+    assert.equal(JSON.stringify(gammaResult).includes("gamma-secret-7777"), false);
+    // 富条目元数据严格校验:未知键/坏类型 → 400;纯字符串输入仍可混用。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
+      {
+        providerKey: "malformed",
+        displayName: "Malformed",
+        apiType: "openai-responses",
+        baseUrl: "https://malformed.example.com",
+        apiKey: "key",
+        models: [{ id: "m", mystery: true }],
+      },
+    );
+    assert.equal(response.status, 400);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "POST",
+      {
+        providerKey: "malformed",
+        displayName: "Malformed",
+        apiType: "openai-responses",
+        baseUrl: "https://malformed.example.com",
+        apiKey: "key",
+        models: ["plain-a", { id: "m", contextWindow: "huge" }],
+      },
+    );
+    assert.equal(response.status, 400);
   } finally {
     await gateway.close();
     store.close();

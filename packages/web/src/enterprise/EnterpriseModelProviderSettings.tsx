@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
-import { Button, ProviderTemplatePicker, TooltipProvider, ZCodeIntlProvider } from "@zcode/ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  createEnterpriseClient,
-  type ModelApiType,
-  type ModelProviderPatch,
-  type ModelProviderView,
-} from "./api.js";
+  Button,
+  InlineEditableProviderCard,
+  ModelProviderSectionNavigation,
+  ProviderTemplatePicker,
+  ServiceProvider,
+  TooltipProvider,
+  ZCodeIntlProvider,
+  type ModelProviderNavGroup,
+} from "@zcode/ui";
+import { createEnterpriseClient, type ModelProviderView } from "./api.js";
 import { badge, chip, zh } from "./presentation.js";
+import { modelTabStrings } from "./model-tab-strings.js";
 import {
   EnterpriseModelProviderForm,
   type ModelProviderFormPrefill,
@@ -16,40 +21,32 @@ import {
   enterprisePickerTemplates,
   enterpriseTemplatePrefill,
 } from "./model-provider-templates.js";
+import {
+  baseUrlHost,
+  createEnterpriseCardCallbacks,
+  enterpriseProviderSettingsServicesFor,
+  providerViewToFormProvider,
+} from "./model-provider-form-adapter.js";
 
 const api = createEnterpriseClient();
 
 /** 模板清单是静态数据,模块级生成一次即可,避免每次渲染重建选择器视图模型。 */
 const pickerTemplates = enterprisePickerTemplates();
 
-const apiTypeLabels: Record<ModelApiType, string> = {
-  "anthropic-messages": "Anthropic Messages",
-  "openai-chat-completions": "OpenAI Chat Completions",
-};
+/** 网关目录没有供应商排序接口:空集让导航项渲染为普通按钮,不出现拖拽手柄。 */
+const NON_REORDERABLE_PROVIDERS: ReadonlySet<string> = new Set<string>();
 
-type ProviderFormTarget =
-  | { mode: "create"; prefill: ModelProviderFormPrefill | null }
-  | { mode: "edit"; provider: ModelProviderView };
+type ProviderTestState = { running: boolean; ok?: boolean; models?: string[]; error?: string };
 
-interface ProviderTestState {
-  running: boolean;
-  ok?: boolean;
-  models?: string[];
-  error?: string;
-}
-
-function baseUrlHost(url: string): string {
-  try {
-    return new URL(url).host;
-  } catch {
-    return url;
-  }
-}
+/** 新建动线状态:picker → 预填草稿(模板)或空草稿(自定义)。 */
+type ProviderCreateDraft = { prefill: ModelProviderFormPrefill | null };
 
 /**
- * 模型设置 tab = 供应商目录管理(管理员专属页面内的分区):
- * 增删改、设默认、启停与连接测试;成员根本进不了企业设置,无需只读形态。
- * 视图三态:目录列表 → 原生模板选择器 → 表单,与原生设置页「添加供应商」动线一致。
+ * 模型设置 tab = 供应商目录管理(管理员专属),镜像原生 ModelProviderSection 的
+ * 「左导航 + 右详情编辑器」形态:左侧 ModelProviderSectionNavigation(单「租户供应商」
+ * 分组),右侧 InlineEditableProviderCard 负责改名/协议/Base URL/密钥/模型行编辑,
+ * 全部回调经 model-provider-form-adapter 路由到网关目录 API。目录级动作
+ * (设为默认、连接测试、删除)留在详情头部——卡片不管租户默认语义。
  */
 export function EnterpriseModelProviderSettings({
   t,
@@ -60,10 +57,15 @@ export function EnterpriseModelProviderSettings({
   tenantId: string;
   csrfToken: string | null;
 }) {
+  const s = t === zh ? modelTabStrings.zh : modelTabStrings.en;
   const [providers, setProviders] = useState<ModelProviderView[]>([]);
+  const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  const [form, setForm] = useState<ProviderFormTarget | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 供卡片草稿并发守卫(settingsRevision):每次目录回读递增,而非用列表长度。
+  const [revision, setRevision] = useState(0);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [createDraft, setCreateDraft] = useState<ProviderCreateDraft | null>(null);
   const [tests, setTests] = useState<Record<string, ProviderTestState>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,72 +77,60 @@ export function EnterpriseModelProviderSettings({
       .then((items) => {
         setProviders(items);
         setFailed(false);
+        setLoading(false);
+        setRevision((current) => current + 1);
+        // 保持当前选中;目录里已不存在(如删除)时回落到首项,与原生导航一致。
+        setSelectedId((current) =>
+          current && items.some((provider) => provider.id === current)
+            ? current
+            : (items[0]?.id ?? null),
+        );
       })
-      .catch(() => setFailed(true));
+      .catch(() => {
+        setFailed(true);
+        setLoading(false);
+      });
   }, [tenantId]);
 
   useEffect(() => {
-    // 切换租户时目录、选择器、表单与测试结果一并重置,避免残留上一租户的数据。
-    setForm(null);
+    // 切换租户时目录、选择器、草稿与测试结果一并重置,避免残留上一租户的数据。
+    setSelectedId(null);
     setPickerOpen(false);
+    setCreateDraft(null);
     setTests({});
+    setLoading(true);
     reload();
   }, [reload]);
 
-  async function run(action: () => Promise<void>) {
-    setBusy(true);
-    setError(null);
-    try {
-      await action();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const selected = useMemo(
+    () => providers.find((provider) => provider.id === selectedId) ?? null,
+    [providers, selectedId],
+  );
+  const navigationGroups = useMemo<ModelProviderNavGroup[]>(
+    () => [
+      {
+        id: "custom",
+        title: s.navGroupTitle,
+        items: providers.map((provider) => ({
+          key: `custom:${provider.id}`,
+          type: "custom" as const,
+          label: provider.displayName || provider.providerKey,
+          provider: providerViewToFormProvider(provider),
+          statusActive: provider.enabled,
+        })),
+      },
+    ],
+    [providers, s.navGroupTitle],
+  );
 
-  function submitProvider(value: ModelProviderFormValue) {
-    void run(async () => {
-      if (form?.mode === "edit") {
-        // 编辑时空密钥不下发,由服务端保留原值;设默认/启停等标记直接随表单提交。
-        const patch: ModelProviderPatch = {
-          displayName: value.displayName,
-          apiType: value.apiType,
-          baseUrl: value.baseUrl,
-          models: value.models,
-          ...(value.defaultModel ? { defaultModel: value.defaultModel } : {}),
-          isDefault: value.isDefault,
-          enabled: value.enabled,
-          ...(value.apiKey ? { apiKey: value.apiKey } : {}),
-        };
-        await api.updateModelProvider(form.provider.id, patch, csrfToken);
-      } else {
-        await api.createModelProvider(
-          tenantId,
-          {
-            providerKey: value.providerKey,
-            displayName: value.displayName,
-            apiType: value.apiType,
-            baseUrl: value.baseUrl,
-            apiKey: value.apiKey,
-            models: value.models,
-            ...(value.defaultModel ? { defaultModel: value.defaultModel } : {}),
-            isDefault: value.isDefault,
-            enabled: value.enabled,
-          },
-          csrfToken,
-        );
-      }
-      setForm(null);
-      reload();
-    });
+  function describeFailure(cause: unknown): string {
+    return cause instanceof Error ? cause.message : String(cause);
   }
 
   /** 模板创建在本地完成预填,不落库;真正的创建发生在表单提交。 */
   function createFromTemplate(templateId: string): Promise<void> {
     const template = enterpriseTemplatePrefill(templateId);
-    setForm({
-      mode: "create",
+    setCreateDraft({
       // providerKey 直接采用模板 id(小写连字符,满足目录 key 约束),未收录 id 退回空表单。
       prefill: template
         ? {
@@ -161,8 +151,7 @@ export function EnterpriseModelProviderSettings({
 
   /** 自定义创建:选择器把本地化的默认名称作为 label 传入,仅预填显示名。 */
   function createCustom(label: string): Promise<void> {
-    setForm({
-      mode: "create",
+    setCreateDraft({
       prefill: {
         providerKey: "",
         displayName: label,
@@ -175,26 +164,48 @@ export function EnterpriseModelProviderSettings({
     return Promise.resolve();
   }
 
-  function markDefault(provider: ModelProviderView) {
-    void run(async () => {
-      await api.updateModelProvider(provider.id, { isDefault: true }, csrfToken);
-      reload();
-    });
+  function submitCreate(value: ModelProviderFormValue) {
+    setBusy(true);
+    setError(null);
+    api
+      .createModelProvider(
+        tenantId,
+        {
+          providerKey: value.providerKey,
+          displayName: value.displayName,
+          apiType: value.apiType,
+          baseUrl: value.baseUrl,
+          apiKey: value.apiKey,
+          models: value.models,
+          ...(value.defaultModel ? { defaultModel: value.defaultModel } : {}),
+          isDefault: value.isDefault,
+          enabled: value.enabled,
+        },
+        csrfToken,
+      )
+      .then((created) => {
+        // 新建提交后直接选中新建项,管理员可以立刻补配模型元数据。
+        setCreateDraft(null);
+        setSelectedId(created.id);
+        reload();
+      })
+      .catch((cause: unknown) => setError(describeFailure(cause)))
+      .finally(() => setBusy(false));
   }
 
-  function toggleEnabled(provider: ModelProviderView) {
-    void run(async () => {
-      await api.updateModelProvider(provider.id, { enabled: !provider.enabled }, csrfToken);
-      reload();
-    });
+  function markDefault(provider: ModelProviderView) {
+    void api
+      .updateModelProvider(provider.id, { isDefault: true }, csrfToken)
+      .then(reload)
+      .catch((cause: unknown) => setError(describeFailure(cause)));
   }
 
   function removeProvider(provider: ModelProviderView) {
     if (!window.confirm(t.deleteProviderConfirm.replace("{name}", provider.displayName))) return;
-    void run(async () => {
-      await api.deleteModelProvider(provider.id, csrfToken);
-      reload();
-    });
+    api
+      .deleteModelProvider(provider.id, csrfToken)
+      .then(reload)
+      .catch((cause: unknown) => setError(describeFailure(cause)));
   }
 
   function testProvider(provider: ModelProviderView) {
@@ -215,26 +226,109 @@ export function EnterpriseModelProviderSettings({
       .catch((cause: unknown) =>
         setTests((current) => ({
           ...current,
-          [provider.id]: {
-            running: false,
-            ok: false,
-            error: cause instanceof Error ? cause.message : String(cause),
-          },
+          [provider.id]: { running: false, ok: false, error: describeFailure(cause) },
         })),
       );
   }
 
+  function renderDetail() {
+    if (!selected) {
+      return (
+        <div className="flex min-h-48 flex-col justify-center gap-2 text-ui-sm text-foreground-subtle">
+          {providers.length === 0 && !failed ? <p>{t.noModelProviders}</p> : null}
+          <p>{s.emptyDetailHint}</p>
+        </div>
+      );
+    }
+    const test = tests[selected.id];
+    // 模板控制台地址按 providerKey 反查(创建时 providerKey 即模板 id),供密钥区外链。
+    const apiKeyManagementUrl = enterpriseTemplatePrefill(
+      selected.providerKey,
+    )?.apiKeyManagementUrl;
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <code className={chip}>{selected.providerKey}</code>
+          {selected.isDefault ? (
+            <span className={`${badge} border-primary text-foreground`}>{t.defaultBadge}</span>
+          ) : null}
+          <span className="text-ui-xs text-foreground-subtle">
+            {baseUrlHost(selected.baseUrl)}
+            {selected.apiKeyLast4 ? ` · ••••${selected.apiKeyLast4}` : ""}
+            {selected.defaultModel ? ` · ${t.providerDefaultModel}: ${selected.defaultModel}` : ""}
+          </span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={selected.isDefault}
+              onClick={() => markDefault(selected)}
+            >
+              {t.setDefaultAction}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={test?.running}
+              onClick={() => testProvider(selected)}
+            >
+              {test?.running ? t.testing : t.testConnection}
+            </Button>
+          </div>
+        </div>
+        {test && !test.running ? (
+          test.ok ? (
+            <p className="text-ui-xs text-foreground-subtle" role="status">
+              {t.testOkSummary.replace("{count}", String(test.models?.length ?? 0))}
+              {test.models?.length ? ` · ${test.models.join(", ")}` : ""}
+            </p>
+          ) : (
+            <p className="text-ui-xs text-destructive" role="alert">
+              {test.error ? `${t.testFailed} · ${test.error}` : t.testFailed}
+            </p>
+          )
+        ) : null}
+        {/* ServiceProvider 注入适配层的 resolveModelConfig 桩(见 adapter 注释):
+            原生模型区块在渲染期读取这一个服务面,企业侧无原生运行时服务。 */}
+        <ServiceProvider services={enterpriseProviderSettingsServicesFor(selected.baseUrl)}>
+          <InlineEditableProviderCard
+            key={selected.id}
+            provider={providerViewToFormProvider(selected)}
+            settingsRevision={revision}
+            onDelete={() => removeProvider(selected)}
+            {...(apiKeyManagementUrl
+              ? {
+                  presetApiKeyUrl: apiKeyManagementUrl,
+                  onOpenPresetApiKey: () =>
+                    window.open(apiKeyManagementUrl, "_blank", "noopener,noreferrer"),
+                }
+              : {})}
+            {...createEnterpriseCardCallbacks({
+              view: selected,
+              gateway: api,
+              csrfToken,
+              reload,
+            })}
+          />
+        </ServiceProvider>
+      </div>
+    );
+  }
+
+  const detail = renderDetail();
+
   return (
     // 企业设置浮层渲染在全局 ZCodeIntlProvider 之外(main.tsx 只给原生 Root 挂了 Provider),
-    // 而原生展示组件(ProviderTemplatePicker/ApiKeyInput)内部调用 useZCodeIntl,缺省会抛错。
+    // 而原生编辑组件(卡片/导航/选择器)内部调用 useZCodeIntl,缺省会抛错。
     // 这里以无服务形态就近补一层:语言按本地偏好/浏览器语言解析,不引入任何服务 hook。
     <ZCodeIntlProvider>
-      {/* TooltipProvider 同样缺省:模板卡片内的 ControlHintTooltip 依赖它,
+      {/* TooltipProvider 同样缺省:原生组件内的 ControlHintTooltip 依赖它,
           原生只在 Root 内挂载,这里与 IntlProvider 一起就地补齐。 */}
       <TooltipProvider>
         <section className="flex flex-col gap-4">
           <h1 className="text-ui-xl font-medium">{t.modelSettings}</h1>
-          <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.modelProviderHint}</p>
           {failed ? (
             <p className="text-ui-sm text-destructive" role="alert">
               {t.loadFailed}
@@ -242,20 +336,10 @@ export function EnterpriseModelProviderSettings({
           ) : null}
           {error ? (
             <p className="text-ui-sm text-destructive" role="alert">
-              {error}
+              {s.catalogErrorTitle} · {error}
             </p>
           ) : null}
-          {form ? (
-            <EnterpriseModelProviderForm
-              key={form.mode === "edit" ? form.provider.id : "create"}
-              t={t}
-              initial={form.mode === "edit" ? form.provider : null}
-              prefill={form.mode === "create" ? form.prefill : null}
-              busy={busy}
-              onSubmit={submitProvider}
-              onCancel={() => setForm(null)}
-            />
-          ) : pickerOpen ? (
+          {pickerOpen ? (
             <ProviderTemplatePicker
               templates={pickerTemplates}
               creating={busy}
@@ -263,127 +347,45 @@ export function EnterpriseModelProviderSettings({
               onCreateFromTemplate={createFromTemplate}
               onCreateCustom={createCustom}
             />
+          ) : createDraft ? (
+            <EnterpriseModelProviderForm
+              key={createDraft.prefill?.providerKey || "create-custom"}
+              t={t}
+              initial={null}
+              prefill={createDraft.prefill}
+              busy={busy}
+              onSubmit={submitCreate}
+              onCancel={() => setCreateDraft(null)}
+            />
           ) : (
             <>
-              <div>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.modelProviderHint}</p>
                 <Button type="button" onClick={() => setPickerOpen(true)}>
                   {t.newModelProvider}
                 </Button>
               </div>
-              {providers.length === 0 && !failed ? (
-                <p className="text-ui-sm text-foreground-subtle">{t.noModelProviders}</p>
-              ) : (
-                <ul
-                  className="flex flex-col gap-2"
+              {/* 镜像原生 SectionLayout 的分栏结构;data-testid 覆盖导航+详情整体。 */}
+              <div className="overflow-clip rounded-xl border border-border bg-card">
+                <div
+                  className="grid min-h-[36rem] grid-cols-[56px_minmax(0,1fr)] gap-0 md:grid-cols-[224px_minmax(0,1fr)]"
                   data-testid="enterprise-settings-model-providers"
                 >
-                  {providers.map((provider) => {
-                    const test = tests[provider.id];
-                    return (
-                      <li
-                        key={provider.id}
-                        className="flex flex-col gap-2 rounded-xl border border-border bg-card px-4 py-3"
-                      >
-                        <div className="flex flex-wrap items-center gap-2">
-                          <strong className="text-ui-sm font-medium">{provider.displayName}</strong>
-                          <code className={chip}>{provider.providerKey}</code>
-                          <span className={badge}>{apiTypeLabels[provider.apiType]}</span>
-                          {provider.isDefault ? (
-                            <span className={`${badge} border-primary text-foreground`}>
-                              {t.defaultBadge}
-                            </span>
-                          ) : null}
-                          <span className={badge}>
-                            {provider.enabled ? t.enabledOn : t.enabledOff}
-                          </span>
-                        </div>
-                        <div className="text-ui-xs text-foreground-subtle">
-                          {baseUrlHost(provider.baseUrl)} · ••••{provider.apiKeyLast4}
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {provider.models.length === 0 ? (
-                            <span className="text-ui-xs text-foreground-subtle">
-                              {t.noProviderModels}
-                            </span>
-                          ) : (
-                            provider.models.map((model) => (
-                              <code
-                                key={model}
-                                className={
-                                  model === provider.defaultModel
-                                    ? `${chip} border-primary text-foreground`
-                                    : chip
-                                }
-                              >
-                                {model}
-                              </code>
-                            ))
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => setForm({ mode: "edit", provider })}
-                          >
-                            {t.edit}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy || provider.isDefault}
-                            onClick={() => markDefault(provider)}
-                          >
-                            {t.setDefaultAction}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => toggleEnabled(provider)}
-                          >
-                            {provider.enabled ? t.disableAction : t.enableAction}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={test?.running}
-                            onClick={() => testProvider(provider)}
-                          >
-                            {test?.running ? t.testing : t.testConnection}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => removeProvider(provider)}
-                          >
-                            {t.deleteAction}
-                          </Button>
-                        </div>
-                        {test && !test.running ? (
-                          test.ok ? (
-                            <p className="text-ui-xs text-foreground-subtle" role="status">
-                              {t.testOkSummary.replace("{count}", String(test.models?.length ?? 0))}
-                              {test.models?.length ? ` · ${test.models.join(", ")}` : ""}
-                            </p>
-                          ) : (
-                            <p className="text-ui-xs text-destructive" role="alert">
-                              {test.error ? `${t.testFailed} · ${test.error}` : t.testFailed}
-                            </p>
-                          )
-                        ) : null}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+                  <div className="min-w-0 border-r border-border">
+                    <ModelProviderSectionNavigation
+                      navigationGroups={navigationGroups}
+                      selectedNodeKey={selected ? `custom:${selected.id}` : null}
+                      presetLoading={false}
+                      customLoading={loading}
+                      onSelectNavItem={(item) => {
+                        if (item.type === "custom") setSelectedId(item.provider.providerId);
+                      }}
+                      reorderableProviderIds={NON_REORDERABLE_PROVIDERS}
+                    />
+                  </div>
+                  <div className="relative min-w-0 p-4 pb-20 sm:p-6 sm:pb-24">{detail}</div>
+                </div>
+              </div>
             </>
           )}
         </section>

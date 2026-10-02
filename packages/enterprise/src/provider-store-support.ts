@@ -15,6 +15,7 @@ import {
 } from "./model-credential-format.js";
 import {
   decodeEnvelope,
+  decodeStoredModels,
   invalid,
   type ProviderKeyEnvelope,
   type ProviderRow,
@@ -44,14 +45,8 @@ export class ProviderStoreSupport extends EnterpriseStoreBase {
   }
 
   private row(row: Row): ProviderRow {
-    let models: unknown;
-    try {
-      models = JSON.parse(String(row.models));
-    } catch {
-      throw new EnterpriseError("conflict");
-    }
-    if (!Array.isArray(models) || models.some((entry) => typeof entry !== "string"))
-      throw new EnterpriseError("conflict");
+    // v10 起 models 列存富条目对象数组;v9 及之前的字符串数组由迁移原位转换,
+    // 这里只接受新形状,损坏行 fail closed(conflict)。
     return {
       id: String(row.id),
       tenantId: String(row.tenant_id),
@@ -60,7 +55,7 @@ export class ProviderStoreSupport extends EnterpriseStoreBase {
       apiType: String(row.api_type) as ModelApiType,
       baseUrl: String(row.base_url),
       envelope: decodeEnvelope(String(row.api_key_encrypted)),
-      models: models as string[],
+      models: decodeStoredModels(String(row.models)),
       defaultModel: String(row.default_model ?? ""),
       isDefault: Number(row.is_default) === 1,
       enabled: Number(row.enabled) === 1,
@@ -344,7 +339,9 @@ export class ProviderStoreSupport extends EnterpriseStoreBase {
         normalizeModelApiType(String(legacy.api_type)),
         normalizeModelBaseUrl(String(legacy.base_url)),
         JSON.stringify(envelope),
-        JSON.stringify([modelId]),
+        // v10 起直接以富条目形状 seed;v6→v10 一次迁移时即使走到 v10 转换,
+        // 对象数组行也按幂等规则原样保留。
+        JSON.stringify([{ id: modelId }]),
         modelId,
         1,
         1,

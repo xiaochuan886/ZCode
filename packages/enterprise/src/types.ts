@@ -1,4 +1,15 @@
 export type Role = "admin" | "member";
+/**
+ * 网关支持的三种上游协议。定义在 types.ts 是为了避免与
+ * model-credential-format.ts 形成模块环(后者已依赖本文件);两处共用同一联合类型,
+ * `openai-responses` 与 openai-chat-completions 同走 OpenAI 风格发现/鉴权路径。
+ */
+export const MODEL_API_TYPES = [
+  "anthropic-messages",
+  "openai-chat-completions",
+  "openai-responses",
+] as const;
+export type ModelApiType = (typeof MODEL_API_TYPES)[number];
 export interface Tenant {
   id: string;
   name: string;
@@ -102,15 +113,41 @@ export interface McpBinding {
   token: string;
   createdAt: string;
 }
+/**
+ * 单模型目录条目的输入/输出格式元数据(schema v10):前端徽标展示用。
+ * 专家 runtime 的分发仍只携带模型 id,元数据不进入 provider_config.json。
+ */
+export interface ModelInputFormatMetadata {
+  supportsText: boolean;
+  supportsImage: boolean;
+  supportsVideo: boolean;
+  supportsAudio: boolean;
+  supportsPdf: boolean;
+}
+export interface ModelOutputFormatMetadata {
+  supportsText: boolean;
+}
+/** 富模型条目:`enabled` 缺省视为启用(存储约定:只有显式 false 才落 enabled:false)。 */
+export interface TenantModelCatalogEntry {
+  id: string;
+  enabled?: boolean;
+  contextWindow?: number;
+  inputFormat?: ModelInputFormatMetadata;
+  outputFormat?: ModelOutputFormatMetadata;
+  supportsToolCall?: boolean;
+  supportsJsonSchemaOutput?: boolean;
+}
 /** 租户模型供应商目录行(投影):只带 key 尾四位,绝不携带解密后的 API key。 */
 export interface TenantModelProvider {
   id: string;
   tenantId: string;
   providerKey: string;
   displayName: string;
-  apiType: string;
+  /** 三种上游协议:anthropic-messages / openai-chat-completions / openai-responses。 */
+  apiType: ModelApiType;
+
   baseUrl: string;
-  models: string[];
+  models: TenantModelCatalogEntry[];
   defaultModel: string;
   isDefault: boolean;
   enabled: boolean;

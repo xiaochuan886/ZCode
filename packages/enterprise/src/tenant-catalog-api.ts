@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
-import type { EnterpriseSession, TenantModelProviderDistribution } from "./types.js";
+import type {
+  EnterpriseSession,
+  TenantModelCatalogEntry,
+  TenantModelProviderDistribution,
+} from "./types.js";
 import { EnterpriseError, expertRuntimeId } from "./types.js";
 import { requireTenantAdmin } from "./admin-guard.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
@@ -31,11 +35,20 @@ function optionalBoolean(value: unknown): boolean | undefined {
   return value;
 }
 
-function optionalStringArray(value: unknown): string[] | undefined {
+/**
+ * models 输入向后兼容(schema v10):条目既可以是纯 id 字符串,也可以是富元数据
+ * 对象;严格的键/类型校验(未知键、坏类型 → 400)由 store 层 validateModels 统一
+ * 执行,这里只做透传前的粗形状过滤(非 string/非对象直接拒绝)。
+ */
+function optionalModelEntries(value: unknown): (string | TenantModelCatalogEntry)[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
+  if (!Array.isArray(value)) throw new EnterpriseError("validation");
+  return value.map((entry) => {
+    if (typeof entry === "string") return entry;
+    if (typeof entry === "object" && entry !== null && !Array.isArray(entry))
+      return entry as unknown as TenantModelCatalogEntry;
     throw new EnterpriseError("validation");
-  return value as string[];
+  });
 }
 
 /** 个人 Skill 名只允许受限字符集,且拒绝绝对路径与 '.'/'..' 段,防目录穿越。 */
@@ -74,6 +87,8 @@ async function testProviderConnection(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), connectionTestTimeoutMs);
   try {
+    // openai-responses 与 openai-chat-completions 共用 OpenAI 风格发现路径:
+    // Bearer 头 + `{baseUrl}/models`,解析 data[].id;仅 anthropic 分支不同。
     const url =
       provider.apiType === "anthropic-messages"
         ? `${provider.baseUrl}/v1/models`
@@ -154,7 +169,7 @@ export async function handleTenantCatalogApiRequest(
       apiType: str(body.apiType),
       baseUrl: str(body.baseUrl),
       apiKey: str(body.apiKey),
-      ...(body.models === undefined ? {} : { models: optionalStringArray(body.models)! }),
+      ...(body.models === undefined ? {} : { models: optionalModelEntries(body.models)! }),
       ...(body.defaultModel === undefined ? {} : { defaultModel: optionalText(body.defaultModel) }),
       ...(body.isDefault === undefined ? {} : { isDefault: optionalBoolean(body.isDefault)! }),
       ...(body.enabled === undefined ? {} : { enabled: optionalBoolean(body.enabled)! }),
@@ -173,7 +188,7 @@ export async function handleTenantCatalogApiRequest(
       ...(body.apiType === undefined ? {} : { apiType: optionalText(body.apiType) }),
       ...(body.baseUrl === undefined ? {} : { baseUrl: optionalText(body.baseUrl) }),
       ...(body.apiKey === undefined ? {} : { apiKey: optionalText(body.apiKey) }),
-      ...(body.models === undefined ? {} : { models: optionalStringArray(body.models) }),
+      ...(body.models === undefined ? {} : { models: optionalModelEntries(body.models) }),
       ...(body.defaultModel === undefined ? {} : { defaultModel: optionalText(body.defaultModel) }),
       ...(body.isDefault === undefined ? {} : { isDefault: optionalBoolean(body.isDefault)! }),
       ...(body.enabled === undefined ? {} : { enabled: optionalBoolean(body.enabled)! }),

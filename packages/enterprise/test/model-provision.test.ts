@@ -38,7 +38,11 @@ function slot(
     apiType: "openai-chat-completions",
     baseUrl: `https://${overrides.providerKey}.example.com/v1`,
     apiKey: `key-${overrides.providerKey}`,
-    models: [`${overrides.providerKey}-model-a`, `${overrides.providerKey}-model-b`],
+    // v10 起目录条目为富对象;缺省 enabled 即启用。
+    models: [
+      { id: `${overrides.providerKey}-model-a` },
+      { id: `${overrides.providerKey}-model-b` },
+    ],
     defaultModel: `${overrides.providerKey}-model-a`,
     isDefault: false,
     ...overrides,
@@ -180,6 +184,52 @@ test("re-provisioning replaces the managed slot set and keeps unmanaged rules", 
     );
     assert.deepEqual(emptied.config.providerOrder, ["self-hosted"]);
     assert.equal(emptied.config.defaultModelSelection, undefined);
+  } finally {
+    await rm(runtimeDataRoot, { recursive: true, force: true });
+  }
+});
+
+test("per-model disabled entries are excluded from the expert slot", async () => {
+  const runtimeDataRoot = await mkdtemp(join(tmpdir(), "zcode-enterprise-model-disabled-"));
+  try {
+    await provisionExpertModelProviders({
+      runtimeOwner: "e-user-1-tenant-a",
+      tenantId: "tenant-a",
+      runtimeDataRoot,
+      providers: [
+        slot({
+          providerKey: "acme",
+          isDefault: true,
+          // 单模型级停用:默认模型 acme-model-a 与 acme-model-c 都被停用。
+          models: [
+            { id: "acme-model-a", enabled: false, contextWindow: 128000 },
+            { id: "acme-model-b" },
+            { id: "acme-model-c", enabled: false },
+          ],
+        }),
+        slot({
+          providerKey: "beta",
+          // 全部停用:槽位不借默认模型复活停用条目;默认选择整体省略。
+          models: [{ id: "beta-model-a", enabled: false }],
+        }),
+      ],
+    });
+    const config = await readConfig(runtimeDataRoot);
+    const rules = config.config.providerConfigRules.providerRules;
+    const acme = rules[0]!;
+    // personalModelIds/modelOrder 只含 enabled !== false 的 id;分发不带元数据。
+    assert.deepEqual(acme.config.personalModelIds, ["acme-model-b"]);
+    assert.deepEqual(acme.config.modelOrder, ["acme-model-b"]);
+    assert.equal(JSON.stringify(acme).includes("contextWindow"), false);
+    // 停用的默认模型顺延到首个可用模型,不指向未分发条目。
+    assert.deepEqual(config.config.defaultModelSelection, {
+      providerId: "enterprise-acme",
+      modelId: "acme-model-b",
+    });
+    // 全部条目停用的供应商:空模型槽位,也不产生默认选择。
+    const beta = rules[1]!;
+    assert.deepEqual(beta.config.personalModelIds, []);
+    assert.deepEqual(beta.config.modelOrder, []);
   } finally {
     await rm(runtimeDataRoot, { recursive: true, force: true });
   }

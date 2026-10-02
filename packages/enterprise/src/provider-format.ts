@@ -1,4 +1,9 @@
-import { EnterpriseError } from "./types.js";
+import {
+  EnterpriseError,
+  type ModelInputFormatMetadata,
+  type ModelOutputFormatMetadata,
+  type TenantModelCatalogEntry,
+} from "./types.js";
 import type { EncryptedModelCredential, ModelApiType } from "./model-credential-format.js";
 
 /** Stable slug identifying a provider inside its tenant; also the managed slot suffix. */
@@ -12,7 +17,7 @@ export interface TenantModelProviderInput {
   apiType: string;
   baseUrl: string;
   apiKey: string;
-  models?: string[];
+  models?: (string | TenantModelCatalogEntry)[];
   defaultModel?: string;
   isDefault?: boolean;
   enabled?: boolean;
@@ -24,7 +29,7 @@ export interface TenantModelProviderPatch {
   apiType?: string;
   baseUrl?: string;
   apiKey?: string;
-  models?: string[];
+  models?: (string | TenantModelCatalogEntry)[];
   defaultModel?: string;
   isDefault?: boolean;
   enabled?: boolean;
@@ -47,7 +52,7 @@ export interface ProviderRow {
   apiType: ModelApiType;
   baseUrl: string;
   envelope: ProviderKeyEnvelope;
-  models: string[];
+  models: TenantModelCatalogEntry[];
   defaultModel: string;
   isDefault: boolean;
   enabled: boolean;
@@ -76,15 +81,111 @@ export function validateApiKey(value: string): string {
   return value;
 }
 
-export function validateModels(value: string[] | undefined): string[] {
+const INPUT_FORMAT_KEYS = [
+  "supportsText",
+  "supportsImage",
+  "supportsVideo",
+  "supportsAudio",
+  "supportsPdf",
+] as const;
+const ENTRY_KEYS = [
+  "id",
+  "enabled",
+  "contextWindow",
+  "inputFormat",
+  "outputFormat",
+  "supportsToolCall",
+  "supportsJsonSchemaOutput",
+] as const;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * 本文件运行在 strictNullChecks=off 的基线下:对 never 返回函数(invalid)的
+ * 调用不做控制流收窄,因此以下校验一律用内联 throw 语句收窄;错误码保持既有
+ * EnterpriseError("validation") 语义不变。
+ */
+const validationError = () => new EnterpriseError("validation");
+
+/** 数字元数据(如 contextWindow)必须是有限正数;拒绝 NaN/Infinity/非正数。 */
+function validatePositiveNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  throw validationError();
+}
+
+function validateBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  throw validationError();
+}
+
+/** 严格对象形状:键集合必须完全一致(未知键拒绝,缺键拒绝),值全部为布尔。 */
+function validateBooleanShape<T extends object>(
+  value: unknown,
+  keys: readonly (keyof T & string)[],
+): T {
+  if (!isPlainObject(value)) throw validationError();
+  const present = Object.keys(value);
+  if (present.length !== keys.length || keys.some((key) => !(key in value)))
+    throw validationError();
+  const result: Record<string, boolean> = {};
+  for (const key of keys) result[key] = validateBoolean(value[key]);
+  return result as T;
+}
+
+/**
+ * 校验单个富条目并归一化为存储形状:
+ * - 字符串输入(向后兼容)归一化为 `{id}`;
+ * - 未知元数据键/坏类型一律 validation 拒绝(不给默认值兜底,避免静默丢数据);
+ * - enabled 存储约定:只有显式 `false` 才落 `enabled:false`,true/缺省都省略键
+ *   (缺省即启用),保证存量行迁移后无需补写 enabled:true。
+ */
+function validateModelEntry(value: unknown): TenantModelCatalogEntry {
+  if (typeof value === "string") {
+    const model = value.trim();
+    if (!model || model.length > MAX_MODEL_ID_LENGTH || model.includes("\0"))
+      throw validationError();
+    return { id: model };
+  }
+  if (!isPlainObject(value)) throw validationError();
+  const unknownKeys = Object.keys(value).filter(
+    (key) => !(ENTRY_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length) throw validationError();
+  if (typeof value.id !== "string") throw validationError();
+  const model = value.id.trim();
+  if (!model || model.length > MAX_MODEL_ID_LENGTH || model.includes("\0")) throw validationError();
+  const entry: TenantModelCatalogEntry = { id: model };
+  if (value.enabled !== undefined && !validateBoolean(value.enabled)) entry.enabled = false;
+  if (value.contextWindow !== undefined)
+    entry.contextWindow = validatePositiveNumber(value.contextWindow);
+  if (value.inputFormat !== undefined)
+    entry.inputFormat = validateBooleanShape<ModelInputFormatMetadata>(
+      value.inputFormat,
+      INPUT_FORMAT_KEYS,
+    );
+  if (value.outputFormat !== undefined)
+    entry.outputFormat = validateBooleanShape<ModelOutputFormatMetadata>(value.outputFormat, [
+      "supportsText",
+    ]);
+  if (value.supportsToolCall !== undefined)
+    entry.supportsToolCall = validateBoolean(value.supportsToolCall);
+  if (value.supportsJsonSchemaOutput !== undefined)
+    entry.supportsJsonSchemaOutput = validateBoolean(value.supportsJsonSchemaOutput);
+  return entry;
+}
+
+export function validateModels(
+  value: (string | TenantModelCatalogEntry)[] | undefined,
+): TenantModelCatalogEntry[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) invalid();
-  const models: string[] = [];
+  const models: TenantModelCatalogEntry[] = [];
   for (const entry of value) {
-    if (typeof entry !== "string") invalid();
-    const model = entry.trim();
-    if (!model || model.length > MAX_MODEL_ID_LENGTH || model.includes("\0")) invalid();
-    if (!models.includes(model)) models.push(model);
+    const model = validateModelEntry(entry);
+    // id 去重保序:同一 id 的后到条目直接拒绝,避免静默合并元数据。
+    if (models.some((existing) => existing.id === model.id)) invalid();
+    models.push(model);
   }
   if (models.length > MAX_MODELS) invalid();
   return models;
@@ -99,13 +200,39 @@ export function validateDefaultModel(value: string | undefined): string {
 }
 
 export function resolveModels(
-  models: string[],
+  models: TenantModelCatalogEntry[],
   defaultModel: string,
-): { models: string[]; defaultModel: string } {
+): { models: TenantModelCatalogEntry[]; defaultModel: string } {
   if (!models.length) return { models, defaultModel };
-  const resolved = defaultModel && models.includes(defaultModel) ? defaultModel : models[0]!;
+  const ids = models.map((entry) => entry.id);
+  const resolved = defaultModel && ids.includes(defaultModel) ? defaultModel : ids[0]!;
   if (defaultModel && resolved !== defaultModel) invalid();
   return { models, defaultModel: resolved };
+}
+
+/**
+ * 读取库中 v10 形状的 models 列(JSON 对象数组)。存储值一律经 validateModels
+ * 或 v10 迁移写入,这里做防御性形状检查,损坏行 fail closed(conflict),
+ * 与 api_key_envelope 的 decodeEnvelope 同一错误语义。
+ */
+export function decodeStoredModels(raw: string): TenantModelCatalogEntry[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new EnterpriseError("conflict");
+  }
+  if (!Array.isArray(parsed)) throw new EnterpriseError("conflict");
+  return parsed.map((entry): TenantModelCatalogEntry => {
+    if (!isPlainObject(entry) || typeof entry.id !== "string" || !entry.id)
+      throw new EnterpriseError("conflict");
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean")
+      throw new EnterpriseError("conflict");
+    if (entry.contextWindow !== undefined && typeof entry.contextWindow !== "number")
+      throw new EnterpriseError("conflict");
+    // 未知元数据键在写入路径已拒绝;读取保留原样键,避免重复实现投影逻辑。
+    return entry as unknown as TenantModelCatalogEntry;
+  });
 }
 
 export function decodeEnvelope(raw: string): ProviderKeyEnvelope {

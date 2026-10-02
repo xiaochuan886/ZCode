@@ -1,7 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import ipaddr from "ipaddr.js";
-import { EnterpriseError } from "./types.js";
+import { EnterpriseError, MODEL_API_TYPES, type ModelApiType } from "./types.js";
+
+// 协议清单的权威定义在 types.ts(避免模块环);这里原样 re-export,
+// 既有从本模块导入 MODEL_API_TYPES / ModelApiType 的消费方不受影响。
+export { MODEL_API_TYPES } from "./types.js";
+export type { ModelApiType } from "./types.js";
 
 const MODEL_CREDENTIAL_KEY_ENV = "ZCODE_ENTERPRISE_MODEL_CREDENTIALS_KEY";
 const MODEL_CREDENTIAL_KEY_VERSION = 1;
@@ -40,10 +45,6 @@ const blockedModelIpv6Subnets = [
 ].map((cidr) => ipaddr.IPv6.parseCIDR(cidr));
 
 export type ModelCredentialEncryptionKey = string | Uint8Array;
-
-/** These are the native wire formats supported by the enterprise gateway. */
-export const MODEL_API_TYPES = ["anthropic-messages", "openai-chat-completions"] as const;
-export type ModelApiType = (typeof MODEL_API_TYPES)[number];
 
 export interface EncryptedModelCredential {
   keyVersion: number;

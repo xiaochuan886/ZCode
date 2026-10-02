@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { PROVIDER_KEY_PATTERN } from "./provider-format.js";
-import { EnterpriseError } from "./types.js";
+import { EnterpriseError, type TenantModelCatalogEntry } from "./types.js";
 
 /** One enabled tenant catalog provider as handed to the distribution step. */
 export interface ExpertModelProviderSlot {
@@ -12,7 +12,8 @@ export interface ExpertModelProviderSlot {
   apiType: string;
   baseUrl: string;
   apiKey: string;
-  models: string[];
+  /** 目录富条目(v10 原样传入);只有 `enabled !== false` 的 id 会写入专家槽位。 */
+  models: TenantModelCatalogEntry[];
   defaultModel: string;
   isDefault: boolean;
 }
@@ -28,8 +29,29 @@ function isManagedProviderId(value: unknown): boolean {
     : false;
 }
 
+/**
+ * 分发到专家槽位的模型 id:单模型级 `enabled === false` 的条目被排除。
+ * 分发保持 id-only——徽标元数据(contextWindow/输入输出格式等)不进入
+ * provider_config.json,由专家 runtime 的内置规则引擎按 id 自行解析。
+ */
+function distributedModelIds(provider: ExpertModelProviderSlot): string[] {
+  return provider.models.filter((entry) => entry.enabled !== false).map((entry) => entry.id);
+}
+
+/** 默认模型的分发 id:默认模型本身被停用时顺延到首个可用模型,再退回空串。 */
+function distributedDefaultModelId(provider: ExpertModelProviderSlot): string {
+  const ids = distributedModelIds(provider);
+  if (provider.defaultModel && ids.includes(provider.defaultModel)) return provider.defaultModel;
+  return ids[0] ?? "";
+}
+
 function managedProviderRule(provider: ExpertModelProviderSlot) {
-  const models = provider.models.length ? provider.models : [provider.defaultModel].filter(Boolean);
+  const distributed = distributedModelIds(provider);
+  // 目录为空但 defaultModel 仍有值时保留旧回退(正常写入路径下 models 恒含
+  // defaultModel,回退只为防御异常行);只要目录非空就只发未停用条目,
+  // 防止全部停用时停用的默认模型借回退复活。
+  const models =
+    provider.models.length === 0 ? [provider.defaultModel].filter(Boolean) : distributed;
   return {
     providerId: managedModelProviderId(provider.providerKey),
     providerName: provider.displayName,
@@ -138,7 +160,10 @@ export async function provisionExpertModelProviders(input: {
   const defaultModelSelection = defaultProvider
     ? {
         providerId: managedModelProviderId(defaultProvider.providerKey),
-        modelId: defaultProvider.defaultModel || defaultProvider.models[0] || "",
+        // 默认模型被单模型级停用时顺延到首个可用模型;全部停用则置空
+        // (下方的 truthy 展开会整体省略 defaultModelSelection),避免默认
+        // 选择指向一个未分发进槽位的模型 id。
+        modelId: distributedDefaultModelId(defaultProvider),
       }
     : previousDefault &&
         typeof previousDefault.providerId === "string" &&

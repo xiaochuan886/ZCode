@@ -163,9 +163,7 @@ export function EnterpriseSkillSettings({
       }
       const closing = lines.indexOf("---", firstIndex + 1);
       const bodyStart = (closing >= 0 ? closing : firstIndex) + 1;
-      const bodyLine = lines
-        .slice(bodyStart)
-        .find((line) => line.trim() !== "");
+      const bodyLine = lines.slice(bodyStart).find((line) => line.trim() !== "");
       if (bodyLine) return bodyLine.trim();
     }
     return lines.find((line) => line.trim() !== "")?.trim() ?? skill.name;
