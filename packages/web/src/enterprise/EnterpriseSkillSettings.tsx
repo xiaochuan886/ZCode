@@ -254,13 +254,14 @@ export function EnterpriseSkillSettings({
             />
           )}
 
-          {/* 手工创建:常驻表单改为弹窗(原生动线),字段与提交条件不变。 */}
+          {/* 手工创建:常驻表单改为弹窗(原生动线),字段与提交条件不变。
+              限高 + 内容区滚动(与详情弹窗同构),长文本不会把弹窗撑出视口。 */}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
+            <DialogContent className="flex max-h-[min(80vh,640px)] max-w-lg flex-col overflow-hidden p-0">
+              <DialogHeader className="border-b border-popover-border px-4 pt-4 pb-3">
                 <DialogTitle>{s.createDialogTitle}</DialogTitle>
               </DialogHeader>
-              <div className="flex flex-col gap-3">
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto px-4 py-4">
                 <label className="flex flex-col gap-1 text-ui-sm">
                   {t.sharedSkillName}
                   <Input
@@ -279,7 +280,7 @@ export function EnterpriseSkillSettings({
                   />
                 </label>
               </div>
-              <DialogFooter>
+              <DialogFooter className="border-t border-popover-border px-4 py-3">
                 <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
                   {s.cancelAction}
                 </Button>
@@ -294,7 +295,8 @@ export function EnterpriseSkillSettings({
             </DialogContent>
           </Dialog>
 
-          {/* 导入选择器:覆盖个人运行时与全部客户工作区,按名称过滤后逐条导入。 */}
+          {/* 导入选择器:覆盖个人运行时与全部客户工作区,按名称过滤后逐条导入。
+              清单可能很长:限高 + 中部滚动,头部(标题/过滤框)与底部按钮固定。 */}
           <Dialog
             open={importOpen}
             onOpenChange={(open) => {
@@ -302,78 +304,80 @@ export function EnterpriseSkillSettings({
               if (!open) setImportNotice(null);
             }}
           >
-            <DialogContent className="max-w-xl">
-              <DialogHeader>
+            <DialogContent className="flex max-h-[min(80vh,640px)] max-w-xl flex-col overflow-hidden p-0">
+              <DialogHeader className="border-b border-popover-border px-4 pt-4 pb-3">
                 <DialogTitle>{s.importDialogTitle}</DialogTitle>
               </DialogHeader>
-              <p className="text-ui-sm text-foreground-subtle">{t.importSkillHint}</p>
-              {importNotice ? (
-                <p className="text-ui-sm text-destructive" role="alert">
-                  {importNotice}
-                </p>
-              ) : null}
-              {importables === null ? (
-                <p className="text-ui-sm text-foreground-subtle">{t.importSkillPick}</p>
-              ) : importables.length === 0 ? (
-                <p className="text-ui-sm text-foreground-subtle">{t.importSkillEmpty}</p>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  <Input
-                    value={importFilter}
-                    placeholder={t.importSkillFilterPlaceholder}
-                    onChange={(event) => setImportFilter(event.target.value)}
-                  />
-                  {filteredImportables.length === 0 ? (
-                    // 过滤无结果:对齐原生搜索空态,但清单本身非空,不用 importSkillEmpty。
-                    <p className="py-6 text-center text-ui-base text-foreground-subtle">
-                      {s.importSkillSearchEmpty}
-                    </p>
-                  ) : (
-                    <SettingsResourceList
-                      items={filteredImportables}
-                      getKey={(item) => `${item.origin}:${item.workspaceId ?? ""}:${item.name}`}
-                      renderItem={(item) => (
-                        <SkillResourceRow
-                          name={item.name}
-                          description={item.description}
-                          titleExtra={
-                            <>
-                              <span className={SKILL_BADGE_CLASS_NAME}>
-                                {t.importSkillOriginHome}
-                              </span>
-                              {item.origin === "workspace" ? (
-                                <span className={SKILL_BADGE_CLASS_NAME}>
-                                  {t.importSkillOriginWorkspace}
-                                  {item.workspaceName ? ` · ${item.workspaceName}` : ""}
-                                </span>
-                              ) : null}
-                              {item.alreadyImported ? (
-                                <span className={SKILL_BADGE_CLASS_NAME}>
-                                  {t.importSkillAlreadyImported}
-                                </span>
-                              ) : null}
-                            </>
-                          }
-                          trailingExtra={
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              disabled={busy || item.alreadyImported}
-                              onClick={() => importSkill(item)}
-                            >
-                              {item.alreadyImported
-                                ? t.importSkillAlreadyImported
-                                : t.importSkillAction}
-                            </Button>
-                          }
-                        />
-                      )}
+              <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto px-4 py-4">
+                <p className="text-ui-sm text-foreground-subtle">{t.importSkillHint}</p>
+                {importNotice ? (
+                  <p className="text-ui-sm text-destructive" role="alert">
+                    {importNotice}
+                  </p>
+                ) : null}
+                {importables === null ? (
+                  <p className="text-ui-sm text-foreground-subtle">{t.importSkillPick}</p>
+                ) : importables.length === 0 ? (
+                  <p className="text-ui-sm text-foreground-subtle">{t.importSkillEmpty}</p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <Input
+                      value={importFilter}
+                      placeholder={t.importSkillFilterPlaceholder}
+                      onChange={(event) => setImportFilter(event.target.value)}
                     />
-                  )}
-                </div>
-              )}
-              <DialogFooter>
+                    {filteredImportables.length === 0 ? (
+                      // 过滤无结果:对齐原生搜索空态,但清单本身非空,不用 importSkillEmpty。
+                      <p className="py-6 text-center text-ui-base text-foreground-subtle">
+                        {s.importSkillSearchEmpty}
+                      </p>
+                    ) : (
+                      <SettingsResourceList
+                        items={filteredImportables}
+                        getKey={(item) => `${item.origin}:${item.workspaceId ?? ""}:${item.name}`}
+                        renderItem={(item) => (
+                          <SkillResourceRow
+                            name={item.name}
+                            description={item.description}
+                            titleExtra={
+                              <>
+                                <span className={SKILL_BADGE_CLASS_NAME}>
+                                  {t.importSkillOriginHome}
+                                </span>
+                                {item.origin === "workspace" ? (
+                                  <span className={SKILL_BADGE_CLASS_NAME}>
+                                    {t.importSkillOriginWorkspace}
+                                    {item.workspaceName ? ` · ${item.workspaceName}` : ""}
+                                  </span>
+                                ) : null}
+                                {item.alreadyImported ? (
+                                  <span className={SKILL_BADGE_CLASS_NAME}>
+                                    {t.importSkillAlreadyImported}
+                                  </span>
+                                ) : null}
+                              </>
+                            }
+                            trailingExtra={
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={busy || item.alreadyImported}
+                                onClick={() => importSkill(item)}
+                              >
+                                {item.alreadyImported
+                                  ? t.importSkillAlreadyImported
+                                  : t.importSkillAction}
+                              </Button>
+                            }
+                          />
+                        )}
+                      />
+                    )}
+                  </div>
+                )}
+              </div>
+              <DialogFooter className="border-t border-popover-border px-4 py-3">
                 <Button type="button" variant="outline" onClick={() => setImportOpen(false)}>
                   {s.cancelAction}
                 </Button>

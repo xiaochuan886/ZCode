@@ -346,10 +346,15 @@ export async function handleTenantCatalogApiRequest(
     const workspaces = visibleWorkspaces(options.store, session.userId, tenantId);
     // 原生 skill-creator 默认把新 Skill 建在项目级(客户 workspace),因此导入
     // 必须覆盖 HOME 与工作区两个来源,`.zcode/skills` 优先与原生发现一致。
+    // home 来源的视图模型 workspaceId 为 null(非缺省),序列化后是 JSON null:
+    // 按"存在即必须是 string"校验会 400,HOME 导入从未成功过,故 null 归一为缺省。
     const content = await readImportableSkill({
       name,
       origin: body.origin,
-      workspaceId: body.workspaceId === undefined ? undefined : str(body.workspaceId),
+      workspaceId:
+        body.workspaceId === undefined || body.workspaceId === null
+          ? undefined
+          : str(body.workspaceId),
       runtimeHome: join(options.modelRuntimeDataRoot, expertRuntimeId(session.userId, tenantId)),
       workspaces,
       maxBytes: maxPersonalSkillBytes,

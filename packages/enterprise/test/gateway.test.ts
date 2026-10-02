@@ -1269,6 +1269,8 @@ test("admins import a personal skill from their expert runtime home", async () =
   await writeFile(join(skillHome, "my-playbook", "SKILL.md"), "# My playbook\n");
   await mkdir(join(skillHome, "nested", "deep-skill"), { recursive: true });
   await writeFile(join(skillHome, "nested", "deep-skill", "SKILL.md"), "# Nested\n");
+  await mkdir(join(skillHome, "home-null-skill"), { recursive: true });
+  await writeFile(join(skillHome, "home-null-skill", "SKILL.md"), "# Home null\n");
   const gateway = createEnterpriseGateway({
     store,
     auth: new EnterpriseAuth(store),
@@ -1332,6 +1334,20 @@ test("admins import a personal skill from their expert runtime home", async () =
     };
     assert.equal(imported.ok, true);
     assert.equal(imported.skill.name, "my-playbook");
+    // 回归:home 来源的视图模型 workspaceId 为 null(JSON null 而非缺省),
+    // 曾被"存在即必须是 string"校验拒成 400,导致 HOME 导入从未成功。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/skills/import`,
+      "POST",
+      { name: "home-null-skill", origin: "home", workspaceId: null },
+    );
+    assert.equal(response.status, 201);
+    assert.equal(
+      ((await response.json()) as { skill: { name: string } }).skill.name,
+      "home-null-skill",
+    );
     response = await api(
       base,
       adminSession,
@@ -1345,6 +1361,7 @@ test("admins import a personal skill from their expert runtime home", async () =
       (await response.json()) as { items: Array<{ id: string; name: string; content: string }> }
     ).items;
     assert.deepEqual(skills.map((skill) => skill.name).sort(), [
+      "home-null-skill",
       "my-playbook",
       "nested/deep-skill",
     ]);
