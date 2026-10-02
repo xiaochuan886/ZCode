@@ -8,14 +8,11 @@ import {
   Import,
   Plus,
   Share2,
-  Trash2,
   UploadCloud,
-  WandSparkles,
 } from "lucide-react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { Button } from "@/components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog.js";
-import { Switch } from "@/components/ui/switch.js";
 import type {
   ZCodeProvider,
   SkillDiagnostic,
@@ -40,6 +37,7 @@ import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
 import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
 import { invalidateDeferredDraftSessionForSkillChange } from "@/lib/zcodeDraftSkillInvalidation.js";
 import { PluginStoreAvatar } from "@/settings/PluginStoreAvatar.js";
+import { SkillResourceRow } from "@/settings/SkillResourceRow.js";
 import { SettingsResourceHeaderActions } from "@/settings/SettingsResourceHeaderActions.js";
 import {
   SettingsResourceGroupHeader,
@@ -616,84 +614,47 @@ export function SkillsSection({
             listing: resolveUniquePluginListingByName(availablePlugins, skill.pluginName),
           }
         : undefined;
+    // 行骨架迁往 SkillResourceRow(纯展示组件,企业与原生共用):plugin 头像经
+    // icon 槽、「分享到租户」经 trailingExtra 槽注入,行为与视觉保持零变化。
     return (
-      <div
-        key={skill.id}
-        className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-hover"
-      >
-        {skill.scope === "plugin" && pluginIconItem ? (
-          <PluginStoreAvatar item={pluginIconItem} className="size-9 bg-background" />
-        ) : (
-          <div
-            className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-background text-foreground-subtle"
-            aria-hidden="true"
-          >
-            <WandSparkles className="size-4" />
-          </div>
-        )}
-        <div
-          role="button"
-          tabIndex={0}
-          className="min-w-0 cursor-default rounded-md outline-none focus-visible:ring-2 focus-visible:ring-input-border-focused focus-visible:ring-offset-2 focus-visible:ring-offset-card"
-          onClick={() => setSelectedSkill(skill)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              setSelectedSkill(skill);
-            }
-          }}
-        >
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <span className="truncate text-ui-base font-medium text-foreground">{skill.name}</span>
-          </div>
-          <div className="mt-0.5 truncate text-ui-sm text-foreground-subtle">
-            {skill.description ||
-              intl.formatMessage({
-                id: "settings.skills.noDescription",
+      <SkillResourceRow
+        name={skill.name}
+        description={skill.description}
+        enabled={skill.enabled}
+        icon={
+          skill.scope === "plugin" && pluginIconItem ? (
+            <PluginStoreAvatar item={pluginIconItem} className="size-9 bg-background" />
+          ) : undefined
+        }
+        onOpen={() => setSelectedSkill(skill)}
+        onToggle={
+          skill.scope === "plugin"
+            ? undefined
+            : (checked) => {
+                void setEnabled(skill.id, checked);
+              }
+        }
+        onDelete={skill.scope === "plugin" ? undefined : () => void handleDeleteSkill(skill)}
+        trailingExtra={
+          skill.scope !== "plugin" && enterpriseContext?.onShareSkillToTenant ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 text-foreground-subtle hover:bg-hover hover:text-foreground"
+              aria-label={intl.formatMessage({
+                id: "settings.skills.shareToTenant.action",
               })}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {skill.scope === "plugin" ? null : (
-            <>
-              <Switch
-                checked={skill.enabled}
-                onCheckedChange={(checked) => {
-                  void setEnabled(skill.id, checked);
-                }}
-              />
-              {enterpriseContext?.onShareSkillToTenant ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  className="shrink-0 text-foreground-subtle hover:bg-hover hover:text-foreground"
-                  aria-label={intl.formatMessage({
-                    id: "settings.skills.shareToTenant.action",
-                  })}
-                  title={intl.formatMessage({
-                    id: "settings.skills.shareToTenant.action",
-                  })}
-                  onClick={() => void handleShareSkillToTenant(skill)}
-                >
-                  <Share2 className="size-3.5" aria-hidden="true" />
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                className="shrink-0 text-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
-                aria-label={intl.formatMessage({ id: "common.delete" })}
-                title={intl.formatMessage({ id: "common.delete" })}
-                onClick={() => void handleDeleteSkill(skill)}
-              >
-                <Trash2 className="size-3.5" aria-hidden="true" />
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
+              title={intl.formatMessage({
+                id: "settings.skills.shareToTenant.action",
+              })}
+              onClick={() => void handleShareSkillToTenant(skill)}
+            >
+              <Share2 className="size-3.5" aria-hidden="true" />
+            </Button>
+          ) : undefined
+        }
+      />
     );
   };
 

@@ -9,9 +9,15 @@ export { ProviderTemplatePicker } from "./settings/model-provider-section/Provid
 export type { ProviderSettingsTemplateView } from "@zcode/provider";
 export { McpServerForm } from "./settings/McpServerForm.js";
 export type { FormState as McpFormState, McpEditorMode } from "./settings/mcpSettingsShared.js";
+export { McpServerList, McpStatusDot } from "./settings/McpServerList.js";
 export { SettingsFormActions } from "./settings/SettingsFormActions.js";
 export { SettingsFormTextarea } from "./settings/SettingsFormTextarea.js";
 export { SettingsSegmentedTabs } from "./settings/SettingsSegmentedTabs.js";
+// 企业 Skill tab 复用的原生展示层:SkillResourceRow 是 props 驱动的纯展示行
+// (不携带服务 hooks,行内文案走 useZCodeIntl),SettingsResourceList 提供
+// surface 圆角列表容器与分隔线。additive 导出,原生用法不变。
+export { SkillResourceRow } from "./settings/SkillResourceRow.js";
+export { SettingsResourceList } from "./settings/SettingsResourceGroup.js";
 export { Input } from "./components/ui/input.js";
 // 原生展示组件内的 ControlHintTooltip 依赖 TooltipProvider 上下文(原生 Root 内挂载,
 // 企业设置浮层在其外),导出供企业侧就近补挂。additive,原生用法不变。

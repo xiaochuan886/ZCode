@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { Trash2, WandSparkles } from "lucide-react";
-import { Button, Input, SettingsFormActions, SettingsFormTextarea } from "@zcode/ui";
+import {
+  Button,
+  Input,
+  SettingsFormActions,
+  SettingsFormTextarea,
+  SettingsResourceList,
+  SkillResourceRow,
+  TooltipProvider,
+  ZCodeIntlProvider,
+} from "@zcode/ui";
 import {
   createEnterpriseClient,
   EnterpriseApiError,
@@ -13,16 +21,8 @@ import { skillTabStrings } from "./skill-tab-strings.js";
 const api = createEnterpriseClient();
 
 /**
- * 镜像原生 SkillsSection 的列表行骨架(packages/ui/src/settings/SkillsSection.tsx
- * 的 renderSkillRow + SettingsResourceList):surface 圆角容器、border/50 分隔线、
- * 「头像 | 名称/描述截断 | 行尾操作」三列网格与 hover 反馈。原生组件耦合工作区
- * 服务上下文不可直接复用,这里只借无状态的原生原语(Button/Input 等复刻视觉)。
+ * 行内来源徽标:列表底是 surface,徽标用 background 做下一层,与原生头像的分层一致。
  */
-const SKILL_ROW_CLASS_NAME =
-  "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-hover";
-const SKILL_AVATAR_CLASS_NAME =
-  "flex size-9 shrink-0 items-center justify-center rounded-xl bg-background text-foreground-subtle";
-/** 行内来源徽标:列表底是 surface,徽标用 background 做下一层,与原生头像的分层一致。 */
 const SKILL_BADGE_CLASS_NAME =
   "rounded-full border border-border bg-background px-2 py-0.5 text-ui-xs text-foreground-subtle";
 /** 对齐原生 SettingsResourceGroupHeader 的组头样式:标题 + 计数。 */
@@ -36,6 +36,8 @@ const SKILL_EMPTY_STATE_CLASS_NAME =
  * 共享 Skill tab(仅管理员):手工创建 + 选择器导入。原生 skill-creator 新建的
  * Skill 默认落在项目级(客户工作区),所以可导入清单覆盖个人运行时与全部客户
  * 工作区,以名称+描述+来源列表呈现(对齐 composer Skill 选择器的形态)。
+ * 列表行与容器直接复用原生展示层(SkillResourceRow + SettingsResourceList),
+ * 数据与回调仍全部走网关 createEnterpriseClient,不引入服务 hooks。
  */
 export function EnterpriseSkillSettings({
   t,
@@ -170,194 +172,172 @@ export function EnterpriseSkillSettings({
   }
 
   return (
-    <section className="flex flex-col gap-4">
-      <h1 className="text-ui-xl font-medium">{t.sharedSkills}</h1>
-      <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.sharedSkillsHint}</p>
-      {skillsFailed ? (
-        <p className="text-ui-sm text-destructive" role="alert">
-          {t.sharedSkillFailed}
-        </p>
-      ) : null}
-      {error ? (
-        <p className="text-ui-sm text-destructive" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {/* 手工创建表单:自绘 input/textarea 换成原生 Input/SettingsFormTextarea,
-          提交条件与回调语义保持不变。 */}
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
-        <label className="flex flex-col gap-1 text-ui-sm">
-          {t.sharedSkillName}
-          <Input
-            value={skillName}
-            placeholder={t.sharedSkillPlaceholder}
-            onChange={(event) => setSkillName(event.target.value)}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-ui-sm">
-          {t.sharedSkillContent}
-          <SettingsFormTextarea
-            className="min-h-32 font-mono text-ui-sm"
-            value={skillContent}
-            placeholder={t.sharedSkillContentPlaceholder}
-            onChange={(event) => setSkillContent(event.target.value)}
-          />
-        </label>
-        <SettingsFormActions>
-          <Button
-            type="button"
-            disabled={busy || !skillName.trim() || !skillContent.trim()}
-            onClick={createSkill}
-          >
-            {t.createSharedSkill}
-          </Button>
-        </SettingsFormActions>
-      </div>
-      <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="text-ui-sm font-medium">{t.importSkillTitle}</p>
-            <p className="mt-1 text-ui-xs text-foreground-subtle">{t.importSkillHint}</p>
-          </div>
-          <Button type="button" variant="outline" disabled={busy} onClick={loadImportables}>
-            {t.importSkillPick}
-          </Button>
-        </div>
-        {importNotice ? (
-          <p className="text-ui-sm text-destructive" role="alert">
-            {importNotice}
-          </p>
-        ) : null}
-        {importables ? (
-          importables.length === 0 ? (
-            <p className="text-ui-sm text-foreground-subtle">{t.importSkillEmpty}</p>
-          ) : (
-            <div className="flex flex-col gap-2">
+    // 企业设置浮层渲染在全局 ZCodeIntlProvider 之外(main.tsx 只给原生 Root 挂了
+    // Provider),而复用的原生 SkillResourceRow 内部调用 useZCodeIntl,缺省会抛错。
+    // 这里以无服务形态就近补一层:语言按本地偏好/浏览器语言解析,不引入服务 hook。
+    <ZCodeIntlProvider>
+      {/* TooltipProvider 同样缺省:原生展示组件可能内嵌 ControlHintTooltip,
+          原生只在 Root 内挂载,这里与 IntlProvider 一起就地补齐。 */}
+      <TooltipProvider>
+        <section className="flex flex-col gap-4">
+          <h1 className="text-ui-xl font-medium">{t.sharedSkills}</h1>
+          <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.sharedSkillsHint}</p>
+          {skillsFailed ? (
+            <p className="text-ui-sm text-destructive" role="alert">
+              {t.sharedSkillFailed}
+            </p>
+          ) : null}
+          {error ? (
+            <p className="text-ui-sm text-destructive" role="alert">
+              {error}
+            </p>
+          ) : null}
+          {/* 手工创建表单:自绘 input/textarea 换成原生 Input/SettingsFormTextarea,
+              提交条件与回调语义保持不变。 */}
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
+            <label className="flex flex-col gap-1 text-ui-sm">
+              {t.sharedSkillName}
               <Input
-                value={importFilter}
-                placeholder={t.importSkillFilterPlaceholder}
-                onChange={(event) => setImportFilter(event.target.value)}
+                value={skillName}
+                placeholder={t.sharedSkillPlaceholder}
+                onChange={(event) => setSkillName(event.target.value)}
               />
-              {filteredImportables.length === 0 ? (
-                // 过滤无结果:对齐原生搜索空态,但清单本身非空,不用 importSkillEmpty。
-                <p
-                  className={`${SKILL_EMPTY_STATE_CLASS_NAME} text-ui-base text-foreground-subtle`}
-                >
-                  {s.importSkillSearchEmpty}
-                </p>
-              ) : (
-                <ul
-                  className="overflow-hidden rounded-xl bg-surface"
-                  data-testid="enterprise-importable-skills"
-                >
-                  {filteredImportables.map((item, index) => (
-                    <li key={`${item.origin}:${item.workspaceId ?? ""}:${item.name}`}>
-                      {index > 0 ? <div className="h-px bg-border/50" aria-hidden="true" /> : null}
-                      <div className={SKILL_ROW_CLASS_NAME}>
-                        <div className={SKILL_AVATAR_CLASS_NAME} aria-hidden="true">
-                          <WandSparkles className="size-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            <span className="truncate text-ui-base font-medium text-foreground">
-                              {item.name}
-                            </span>
-                            <span className={SKILL_BADGE_CLASS_NAME}>
-                              {t.importSkillOriginHome}
-                            </span>
-                            {item.origin === "workspace" ? (
-                              <span className={SKILL_BADGE_CLASS_NAME}>
-                                {t.importSkillOriginWorkspace}
-                                {item.workspaceName ? ` · ${item.workspaceName}` : ""}
-                              </span>
-                            ) : null}
-                            {item.alreadyImported ? (
-                              <span className={SKILL_BADGE_CLASS_NAME}>
-                                {t.importSkillAlreadyImported}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="mt-0.5 truncate text-ui-sm text-foreground-subtle">
-                            {item.description || item.name}
-                          </div>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            disabled={busy || item.alreadyImported}
-                            onClick={() => importSkill(item)}
-                          >
-                            {item.alreadyImported
-                              ? t.importSkillAlreadyImported
-                              : t.importSkillAction}
-                          </Button>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )
-        ) : null}
-      </div>
-      {/* 租户共享 Skill 目录:组头 + surface 列表,镜像原生技能分区的层级与密度。 */}
-      <section className="space-y-4" data-testid="enterprise-settings-skills">
-        <h3 className={SKILL_GROUP_HEADER_CLASS_NAME}>
-          {s.sharedSkillListTitle}
-          <span className="text-ui-sm font-normal text-foreground-subtle">{skills.length}</span>
-        </h3>
-        {skills.length === 0 ? (
-          <div
-            className={`${SKILL_EMPTY_STATE_CLASS_NAME} flex flex-col items-center justify-center gap-3`}
-          >
-            <div className="space-y-1">
-              <div className="text-ui-base font-medium text-foreground">{t.noSharedSkill}</div>
-              <div className="text-ui-sm text-foreground-subtle">{s.sharedSkillEmptyHint}</div>
-            </div>
+            </label>
+            <label className="flex flex-col gap-1 text-ui-sm">
+              {t.sharedSkillContent}
+              <SettingsFormTextarea
+                className="min-h-32 font-mono text-ui-sm"
+                value={skillContent}
+                placeholder={t.sharedSkillContentPlaceholder}
+                onChange={(event) => setSkillContent(event.target.value)}
+              />
+            </label>
+            <SettingsFormActions>
+              <Button
+                type="button"
+                disabled={busy || !skillName.trim() || !skillContent.trim()}
+                onClick={createSkill}
+              >
+                {t.createSharedSkill}
+              </Button>
+            </SettingsFormActions>
           </div>
-        ) : (
-          <ul className="overflow-hidden rounded-xl bg-surface">
-            {skills.map((skill, index) => (
-              <li key={skill.id}>
-                {index > 0 ? <div className="h-px bg-border/50" aria-hidden="true" /> : null}
-                <div className={SKILL_ROW_CLASS_NAME}>
-                  <div className={SKILL_AVATAR_CLASS_NAME} aria-hidden="true">
-                    <WandSparkles className="size-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2">
-                      <span className="truncate text-ui-base font-medium text-foreground">
-                        {skill.name}
-                      </span>
-                    </div>
-                    <div className="mt-0.5 truncate text-ui-sm text-foreground-subtle">
-                      {skillSummaryLine(skill)}
-                    </div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {/* 删除沿用原生行尾 ghost 图标按钮(悬停转 destructive)。 */}
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0 text-foreground-subtle hover:bg-destructive/10 hover:text-destructive"
-                      aria-label={t.deleteSharedSkill}
-                      title={t.deleteSharedSkill}
-                      disabled={busy}
-                      onClick={() => deleteSkill(skill)}
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-ui-sm font-medium">{t.importSkillTitle}</p>
+                <p className="mt-1 text-ui-xs text-foreground-subtle">{t.importSkillHint}</p>
+              </div>
+              <Button type="button" variant="outline" disabled={busy} onClick={loadImportables}>
+                {t.importSkillPick}
+              </Button>
+            </div>
+            {importNotice ? (
+              <p className="text-ui-sm text-destructive" role="alert">
+                {importNotice}
+              </p>
+            ) : null}
+            {importables ? (
+              importables.length === 0 ? (
+                <p className="text-ui-sm text-foreground-subtle">{t.importSkillEmpty}</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <Input
+                    value={importFilter}
+                    placeholder={t.importSkillFilterPlaceholder}
+                    onChange={(event) => setImportFilter(event.target.value)}
+                  />
+                  {filteredImportables.length === 0 ? (
+                    // 过滤无结果:对齐原生搜索空态,但清单本身非空,不用 importSkillEmpty。
+                    <p
+                      className={`${SKILL_EMPTY_STATE_CLASS_NAME} text-ui-base text-foreground-subtle`}
                     >
-                      <Trash2 className="size-3.5" aria-hidden="true" />
-                    </Button>
-                  </div>
+                      {s.importSkillSearchEmpty}
+                    </p>
+                  ) : (
+                    // 导入清单行复用 SkillResourceRow:无开关/删除,来源徽标经
+                    // titleExtra 行内展示,导入按钮经 trailingExtra 放行尾。
+                    <div data-testid="enterprise-importable-skills">
+                      <SettingsResourceList
+                        items={filteredImportables}
+                        getKey={(item) => `${item.origin}:${item.workspaceId ?? ""}:${item.name}`}
+                        renderItem={(item) => (
+                          <SkillResourceRow
+                            name={item.name}
+                            description={item.description || item.name}
+                            titleExtra={
+                              <>
+                                <span className={SKILL_BADGE_CLASS_NAME}>
+                                  {t.importSkillOriginHome}
+                                </span>
+                                {item.origin === "workspace" ? (
+                                  <span className={SKILL_BADGE_CLASS_NAME}>
+                                    {t.importSkillOriginWorkspace}
+                                    {item.workspaceName ? ` · ${item.workspaceName}` : ""}
+                                  </span>
+                                ) : null}
+                                {item.alreadyImported ? (
+                                  <span className={SKILL_BADGE_CLASS_NAME}>
+                                    {t.importSkillAlreadyImported}
+                                  </span>
+                                ) : null}
+                              </>
+                            }
+                            trailingExtra={
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                disabled={busy || item.alreadyImported}
+                                onClick={() => importSkill(item)}
+                              >
+                                {item.alreadyImported
+                                  ? t.importSkillAlreadyImported
+                                  : t.importSkillAction}
+                              </Button>
+                            }
+                          />
+                        )}
+                      />
+                    </div>
+                  )}
                 </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-    </section>
+              )
+            ) : null}
+          </div>
+          {/* 租户共享 Skill 目录:组头 + 原生 surface 列表容器,行组件与原生技能分区一致。 */}
+          <section className="space-y-4" data-testid="enterprise-settings-skills">
+            <h3 className={SKILL_GROUP_HEADER_CLASS_NAME}>
+              {s.sharedSkillListTitle}
+              <span className="text-ui-sm font-normal text-foreground-subtle">{skills.length}</span>
+            </h3>
+            {skills.length === 0 ? (
+              <div
+                className={`${SKILL_EMPTY_STATE_CLASS_NAME} flex flex-col items-center justify-center gap-3`}
+              >
+                <div className="space-y-1">
+                  <div className="text-ui-base font-medium text-foreground">{t.noSharedSkill}</div>
+                  <div className="text-ui-sm text-foreground-subtle">{s.sharedSkillEmptyHint}</div>
+                </div>
+              </div>
+            ) : (
+              // 共享 Skill 目录无启停语义(网关未提供 PATCH),行内只保留删除动作。
+              <SettingsResourceList
+                items={skills}
+                getKey={(skill) => skill.id}
+                renderItem={(skill) => (
+                  <SkillResourceRow
+                    name={skill.name}
+                    description={skillSummaryLine(skill)}
+                    onDelete={() => deleteSkill(skill)}
+                    deleteDisabled={busy}
+                  />
+                )}
+              />
+            )}
+          </section>
+        </section>
+      </TooltipProvider>
+    </ZCodeIntlProvider>
   );
 }
