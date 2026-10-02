@@ -153,22 +153,32 @@ function catalogModelToFormModel(
     entry.supportsToolCall != null ||
     entry.supportsJsonSchemaOutput != null;
   const baseline = hasProperties ? null : recommendedModelConfig(entry.id, baseUrl);
-  const config: PersonalModelConfig = baseline ?? {
-    ...(entry.enabled === false ? { enabled: false } : {}),
-    ...(hasProperties
-      ? {
-          properties: {
-            ...(entry.contextWindow != null ? { contextWindow: entry.contextWindow } : {}),
-            ...(entry.inputFormat != null ? { inputFormat: entry.inputFormat } : {}),
-            ...(entry.outputFormat != null ? { outputFormat: entry.outputFormat } : {}),
-            ...(entry.supportsToolCall != null ? { supportsToolCall: entry.supportsToolCall } : {}),
-            ...(entry.supportsJsonSchemaOutput != null
-              ? { supportsJsonSchemaOutput: entry.supportsJsonSchemaOutput }
-              : {}),
-          },
-        }
-      : {}),
-  };
+  // 富条目(含参数规格)整体进入 config/personalConfig:personalConfig 是编辑弹窗的
+  // 真实输入源,缺了 optionSpecs 弹窗的推理等级/最大输出就没有实值或 placeholder。
+  const config: PersonalModelConfig = baseline
+    ? {
+        ...baseline,
+        ...(entry.enabled === false ? { enabled: false } : {}),
+      }
+    : {
+        ...(entry.enabled === false ? { enabled: false } : {}),
+        ...(hasProperties
+          ? {
+              properties: {
+                ...(entry.contextWindow != null ? { contextWindow: entry.contextWindow } : {}),
+                ...(entry.inputFormat != null ? { inputFormat: entry.inputFormat } : {}),
+                ...(entry.outputFormat != null ? { outputFormat: entry.outputFormat } : {}),
+                ...(entry.supportsToolCall != null
+                  ? { supportsToolCall: entry.supportsToolCall }
+                  : {}),
+                ...(entry.supportsJsonSchemaOutput != null
+                  ? { supportsJsonSchemaOutput: entry.supportsJsonSchemaOutput }
+                  : {}),
+              },
+            }
+          : {}),
+        ...(entry.optionSpecs != null ? { optionSpecs: entry.optionSpecs } : {}),
+      };
   return {
     kind: "candidate",
     modelId: entry.id,
@@ -222,6 +232,35 @@ export function providerDraftToPatch(
   };
 }
 
+/** 原生 optionSpecs(readonly/可空)→ 目录存储形状(无空值、可变数组)。 */
+function normalizeOptionSpecs(
+  specs:
+    | PersonalModelConfig["optionSpecs"]
+    | EnterpriseModelMetadata["optionSpecs"]
+    | null
+    | undefined,
+): EnterpriseModelMetadata["optionSpecs"] | undefined {
+  if (!specs) return undefined;
+  const out: EnterpriseModelMetadata["optionSpecs"] = {};
+  if (specs.maxOutputTokens) {
+    const { max, map } = specs.maxOutputTokens;
+    if (max != null || map != null)
+      out.maxOutputTokens = {
+        ...(max != null ? { max } : {}),
+        ...(map != null ? { map } : {}),
+      };
+  }
+  if (specs.reasoningLevel) {
+    const { values, map } = specs.reasoningLevel;
+    if ((values != null && values.length > 0) || map != null)
+      out.reasoningLevel = {
+        ...(values != null && values.length > 0 ? { values: [...values] } : {}),
+        ...(map != null ? { map } : {}),
+      };
+  }
+  return out.maxOutputTokens != null || out.reasoningLevel != null ? out : undefined;
+}
+
 /**
  * 模型草稿(推荐基线 + 稀疏个人覆盖)→ 目录元数据条目。
  * 编辑弹窗不可编辑的叶子(outputFormat/supportsToolCall、输入格式的 text/audio)
@@ -241,6 +280,8 @@ function catalogEntryFromDraft(params: {
   const rec = recommended.properties;
   const input = personalConfig.properties?.inputFormat;
   const toolCall = preserved?.supportsToolCall ?? rec?.supportsToolCall;
+  // 参数规格不在弹窗可编辑范围:目录旧值优先,否则用推荐基线烘焙(原生同源规则)。
+  const optionSpecs = normalizeOptionSpecs(preserved?.optionSpecs ?? effective.optionSpecs);
   const jsonSchema = props?.supportsJsonSchemaOutput ?? rec?.supportsJsonSchemaOutput;
   // 目录 outputFormat 是完整形状(仅 supportsText),推荐基线的稀疏值在此归一。
   const outputText =
@@ -273,6 +314,10 @@ function catalogEntryFromDraft(params: {
     },
     ...(toolCall != null ? { supportsToolCall: toolCall } : {}),
     ...(jsonSchema != null ? { supportsJsonSchemaOutput: jsonSchema } : {}),
+    ...(optionSpecs != null &&
+    (optionSpecs.maxOutputTokens != null || optionSpecs.reasoningLevel != null)
+      ? { optionSpecs }
+      : {}),
   };
 }
 

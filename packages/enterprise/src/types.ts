@@ -136,6 +136,11 @@ export interface TenantModelCatalogEntry {
   outputFormat?: ModelOutputFormatMetadata;
   supportsToolCall?: boolean;
   supportsJsonSchemaOutput?: boolean;
+  /** 官方规则的默认参数规格:推理等级(values/map)与最大输出(max/map)。 */
+  optionSpecs?: {
+    maxOutputTokens?: { max?: number; map?: string };
+    reasoningLevel?: { values?: string[]; map?: string };
+  };
 }
 /** 租户模型供应商目录行(投影):只带 key 尾四位,绝不携带解密后的 API key。 */
 export interface TenantModelProvider {

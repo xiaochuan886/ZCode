@@ -745,6 +745,10 @@ test("rich model entries roundtrip, normalize string input and reject malformed 
       outputFormat: { supportsText: true },
       supportsToolCall: true,
       supportsJsonSchemaOutput: true,
+      optionSpecs: {
+        maxOutputTokens: { max: 384000, map: "{'max_tokens': maxOutputTokens}" },
+        reasoningLevel: { values: ["disabled", "low", "high"], map: "{\"reasoning_effort\": reasoningLevel}" },
+      },
     };
     // 混合输入:富条目 + enabled:true 条目 + 纯字符串(向后兼容归一化为 {id})。
     const created = store.createTenantModelProvider(user.id, tenant.id, {
@@ -816,6 +820,11 @@ test("rich model entries roundtrip, normalize string input and reject malformed 
         },
       ],
       [{ id: "x", outputFormat: { supportsText: true, supportsImage: true } }],
+      [{ id: "x", optionSpecs: { unknownSpec: {} } }],
+      [{ id: "x", optionSpecs: {} }],
+      [{ id: "x", optionSpecs: { maxOutputTokens: { max: "big" } } }],
+      [{ id: "x", optionSpecs: { reasoningLevel: { values: [] } } }],
+      [{ id: "x", optionSpecs: { reasoningLevel: { map: 42 } } }],
       [42],
       [{ contextWindow: 128000 }],
       ["a", { id: "a" }],

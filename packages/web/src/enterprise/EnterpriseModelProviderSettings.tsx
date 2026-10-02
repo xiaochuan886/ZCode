@@ -231,6 +231,26 @@ export function EnterpriseModelProviderSettings({
       );
   }
 
+  /**
+   * 连接测试的上游 /models 清单是模型 id 的权威事实;模板清单是官方展示形态
+   * (如 GLM-5.3 大写),上游 API 实际接受的是小写。大小写不一致时调用会 404,
+   * 这里按上游清单逐条修正目录 id(元数据/顺序保留,默认模型跟随改名)。
+   */
+  function fixModelIdsFromUpstream(provider: ModelProviderView, upstream: string[]) {
+    const authoritative = new Map(upstream.map((id) => [id.toLowerCase(), id] as const));
+    const models = provider.models.map((entry) => {
+      const fixed = authoritative.get(entry.id.toLowerCase());
+      return fixed && fixed !== entry.id ? { ...entry, id: fixed } : entry;
+    });
+    const defaultModel = provider.defaultModel
+      ? (authoritative.get(provider.defaultModel.toLowerCase()) ?? provider.defaultModel)
+      : null;
+    void api
+      .updateModelProvider(provider.id, { models, defaultModel }, csrfToken)
+      .then(reload)
+      .catch((cause: unknown) => setError(describeFailure(cause)));
+  }
+
   function renderDetail() {
     if (!selected) {
       return (
@@ -241,6 +261,16 @@ export function EnterpriseModelProviderSettings({
       );
     }
     const test = tests[selected.id];
+    // 与上游清单大小写不一致的条目(仅统计能一一对应上的,避免误报)。
+    const caseFixes =
+      test?.ok && test.models?.length
+        ? selected.models.flatMap((entry) => {
+            const upstream = test.models!.find(
+              (id) => id.toLowerCase() === entry.id.toLowerCase() && id !== entry.id,
+            );
+            return upstream ? [{ from: entry.id, sample: `${entry.id} → ${upstream}` }] : [];
+          })
+        : [];
     // 模板控制台地址按 providerKey 反查(创建时 providerKey 即模板 id),供密钥区外链。
     const apiKeyManagementUrl = enterpriseTemplatePrefill(
       selected.providerKey,
@@ -278,12 +308,36 @@ export function EnterpriseModelProviderSettings({
             </Button>
           </div>
         </div>
+        {selected.apiType === "anthropic-messages" && !/anthropic/i.test(selected.baseUrl) ? (
+          <p className="text-ui-xs text-foreground-subtle" role="alert">
+            {s.anthropicUrlWarning}
+          </p>
+        ) : null}
         {test && !test.running ? (
           test.ok ? (
-            <p className="text-ui-xs text-foreground-subtle" role="status">
-              {t.testOkSummary.replace("{count}", String(test.models?.length ?? 0))}
-              {test.models?.length ? ` · ${test.models.join(", ")}` : ""}
-            </p>
+            <div className="flex flex-col gap-2">
+              <p className="text-ui-xs text-foreground-subtle" role="status">
+                {t.testOkSummary.replace("{count}", String(test.models?.length ?? 0))}
+                {test.models?.length ? ` · ${test.models.join(", ")}` : ""}
+              </p>
+              {caseFixes.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-ui-xs text-foreground-subtle" role="status">
+                    {s.modelIdCaseFixHint
+                      .replace("{count}", String(caseFixes.length))
+                      .replace("{sample}", caseFixes[0]!.sample)}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => fixModelIdsFromUpstream(selected, test.models ?? [])}
+                  >
+                    {s.modelIdCaseFixAction}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
           ) : (
             <p className="text-ui-xs text-destructive" role="alert">
               {test.error ? `${t.testFailed} · ${test.error}` : t.testFailed}

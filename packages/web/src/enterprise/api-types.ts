@@ -29,6 +29,11 @@ export interface EnterpriseModelMetadata {
   outputFormat?: { supportsText: boolean };
   supportsToolCall?: boolean;
   supportsJsonSchemaOutput?: boolean;
+  /** 官方规则的默认参数规格(编辑弹窗默认值):推理等级与最大输出。 */
+  optionSpecs?: {
+    maxOutputTokens?: { max?: number; map?: string };
+    reasoningLevel?: { values?: string[]; map?: string };
+  };
 }
 export interface ModelProviderView {
   id: string;

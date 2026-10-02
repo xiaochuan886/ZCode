@@ -96,6 +96,7 @@ const ENTRY_KEYS = [
   "outputFormat",
   "supportsToolCall",
   "supportsJsonSchemaOutput",
+  "optionSpecs",
 ] as const;
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
@@ -172,7 +173,61 @@ function validateModelEntry(value: unknown): TenantModelCatalogEntry {
     entry.supportsToolCall = validateBoolean(value.supportsToolCall);
   if (value.supportsJsonSchemaOutput !== undefined)
     entry.supportsJsonSchemaOutput = validateBoolean(value.supportsJsonSchemaOutput);
+  if (value.optionSpecs !== undefined) entry.optionSpecs = validateOptionSpecs(value.optionSpecs);
   return entry;
+}
+
+/**
+ * optionSpecs(编辑弹窗默认参数规格)校验:两个受控子键,各自内部键集合严格、
+ * 值形状受限(数字/字符串/字符串数组),map 是原生规则引擎的表达式字符串原样保存。
+ */
+function validateOptionSpecs(value: unknown): NonNullable<TenantModelCatalogEntry["optionSpecs"]> {
+  if (!isPlainObject(value)) throw validationError();
+  const allowed = new Set(["maxOutputTokens", "reasoningLevel"]);
+  for (const key of Object.keys(value)) if (!allowed.has(key)) throw validationError();
+  const result: NonNullable<TenantModelCatalogEntry["optionSpecs"]> = {};
+  const maxOutput = value.maxOutputTokens;
+  if (maxOutput !== undefined) {
+    if (!isPlainObject(maxOutput)) throw validationError();
+    const keys = new Set(Object.keys(maxOutput));
+    if (keys.size === 0 || ![...keys].every((key) => key === "max" || key === "map"))
+      throw validationError();
+    const normalized: { max?: number; map?: string } = {};
+    if (maxOutput.max !== undefined) {
+      if (typeof maxOutput.max !== "number" || !Number.isFinite(maxOutput.max))
+        throw validationError();
+      normalized.max = maxOutput.max;
+    }
+    if (maxOutput.map !== undefined) {
+      if (typeof maxOutput.map !== "string") throw validationError();
+      normalized.map = maxOutput.map;
+    }
+    result.maxOutputTokens = normalized;
+  }
+  const reasoning = value.reasoningLevel;
+  if (reasoning !== undefined) {
+    if (!isPlainObject(reasoning)) throw validationError();
+    const keys = new Set(Object.keys(reasoning));
+    if (keys.size === 0 || ![...keys].every((key) => key === "values" || key === "map"))
+      throw validationError();
+    const normalized: { values?: string[]; map?: string } = {};
+    if (reasoning.values !== undefined) {
+      if (
+        !Array.isArray(reasoning.values) ||
+        reasoning.values.length === 0 ||
+        !reasoning.values.every((item) => typeof item === "string" && item.length > 0)
+      )
+        throw validationError();
+      normalized.values = reasoning.values as string[];
+    }
+    if (reasoning.map !== undefined) {
+      if (typeof reasoning.map !== "string") throw validationError();
+      normalized.map = reasoning.map;
+    }
+    result.reasoningLevel = normalized;
+  }
+  if (!result.maxOutputTokens && !result.reasoningLevel) throw validationError();
+  return result;
 }
 
 export function validateModels(
