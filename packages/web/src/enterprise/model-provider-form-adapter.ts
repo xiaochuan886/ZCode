@@ -96,8 +96,8 @@ function recommendedModelConfig(modelId: string, baseUrl?: string): PersonalMode
       outputFormat: { supportsText: meta?.outputFormat?.supportsText ?? true },
       supportsToolCall: meta?.supportsToolCall ?? true,
       supportsJsonSchemaOutput: meta?.supportsJsonSchemaOutput ?? false,
-      supportsNativeWebSearch: false,
-      supportsMidConversationSystem: false,
+      supportsNativeWebSearch: meta?.supportsNativeWebSearch ?? false,
+      supportsMidConversationSystem: meta?.supportsMidConversationSystem ?? false,
       requiresMfjsToolSchema: false,
     },
     // 官方规则的参数规格(推理等级 values/map、最大输出)已烘焙进模板:同源模板的
@@ -167,6 +167,12 @@ function catalogModelToFormModel(
       ...(entry.supportsToolCall != null ? { supportsToolCall: entry.supportsToolCall } : {}),
       ...(entry.supportsJsonSchemaOutput != null
         ? { supportsJsonSchemaOutput: entry.supportsJsonSchemaOutput }
+        : {}),
+      ...(entry.supportsNativeWebSearch != null
+        ? { supportsNativeWebSearch: entry.supportsNativeWebSearch }
+        : {}),
+      ...(entry.supportsMidConversationSystem != null
+        ? { supportsMidConversationSystem: entry.supportsMidConversationSystem }
         : {}),
     },
     optionSpecs: entry.optionSpecs ?? baseline.optionSpecs,
@@ -275,6 +281,14 @@ function catalogEntryFromDraft(params: {
   // 参数规格不在弹窗可编辑范围:目录旧值优先,否则用推荐基线烘焙(原生同源规则)。
   const optionSpecs = normalizeOptionSpecs(preserved?.optionSpecs ?? effective.optionSpecs);
   const jsonSchema = props?.supportsJsonSchemaOutput ?? rec?.supportsJsonSchemaOutput;
+  const nativeWebSearch =
+    props?.supportsNativeWebSearch ??
+    preserved?.supportsNativeWebSearch ??
+    rec?.supportsNativeWebSearch;
+  const midConversationSystem =
+    props?.supportsMidConversationSystem ??
+    preserved?.supportsMidConversationSystem ??
+    rec?.supportsMidConversationSystem;
   // 目录 outputFormat 是完整形状(仅 supportsText),推荐基线的稀疏值在此归一。
   const outputText =
     preserved?.outputFormat?.supportsText ?? rec?.outputFormat?.supportsText ?? undefined;
@@ -306,6 +320,11 @@ function catalogEntryFromDraft(params: {
     },
     ...(toolCall != null ? { supportsToolCall: toolCall } : {}),
     ...(jsonSchema != null ? { supportsJsonSchemaOutput: jsonSchema } : {}),
+    // 站点级能力:弹窗可切换则取合成值,否则目录旧值 → 推荐基线(与原生规则一致)。
+    ...(nativeWebSearch != null ? { supportsNativeWebSearch: nativeWebSearch } : {}),
+    ...(midConversationSystem != null
+      ? { supportsMidConversationSystem: midConversationSystem }
+      : {}),
     ...(optionSpecs != null &&
     (optionSpecs.maxOutputTokens != null || optionSpecs.reasoningLevel != null)
       ? { optionSpecs }

@@ -136,6 +136,9 @@ export interface TenantModelCatalogEntry {
   outputFormat?: ModelOutputFormatMetadata;
   supportsToolCall?: boolean;
   supportsJsonSchemaOutput?: boolean;
+  /** 站点级能力透传(原生规则按 baseUrl/apiType 解析,如 BigModel Anthropic 端点)。 */
+  supportsNativeWebSearch?: boolean;
+  supportsMidConversationSystem?: boolean;
   /** 官方规则的默认参数规格:推理等级(values/map)与最大输出(max/map)。 */
   optionSpecs?: {
     maxOutputTokens?: { max?: number; map?: string };

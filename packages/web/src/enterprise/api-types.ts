@@ -29,6 +29,9 @@ export interface EnterpriseModelMetadata {
   outputFormat?: { supportsText: boolean };
   supportsToolCall?: boolean;
   supportsJsonSchemaOutput?: boolean;
+  /** 站点级能力透传(原生规则按 baseUrl/apiType 解析,编辑弹窗对应开关)。 */
+  supportsNativeWebSearch?: boolean;
+  supportsMidConversationSystem?: boolean;
   /** 官方规则的默认参数规格(编辑弹窗默认值):推理等级与最大输出。 */
   optionSpecs?: {
     maxOutputTokens?: { max?: number; map?: string };

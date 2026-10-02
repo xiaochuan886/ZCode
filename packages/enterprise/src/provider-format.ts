@@ -96,6 +96,8 @@ const ENTRY_KEYS = [
   "outputFormat",
   "supportsToolCall",
   "supportsJsonSchemaOutput",
+  "supportsNativeWebSearch",
+  "supportsMidConversationSystem",
   "optionSpecs",
 ] as const;
 
@@ -173,6 +175,10 @@ function validateModelEntry(value: unknown): TenantModelCatalogEntry {
     entry.supportsToolCall = validateBoolean(value.supportsToolCall);
   if (value.supportsJsonSchemaOutput !== undefined)
     entry.supportsJsonSchemaOutput = validateBoolean(value.supportsJsonSchemaOutput);
+  if (value.supportsNativeWebSearch !== undefined)
+    entry.supportsNativeWebSearch = validateBoolean(value.supportsNativeWebSearch);
+  if (value.supportsMidConversationSystem !== undefined)
+    entry.supportsMidConversationSystem = validateBoolean(value.supportsMidConversationSystem);
   if (value.optionSpecs !== undefined) entry.optionSpecs = validateOptionSpecs(value.optionSpecs);
   return entry;
 }
