@@ -100,7 +100,12 @@ function recommendedModelConfig(modelId: string, baseUrl?: string): PersonalMode
       supportsMidConversationSystem: false,
       requiresMfjsToolSchema: false,
     },
-    optionSpecs: { maxOutputTokens: { max: 32000 }, reasoningLevel: DEFAULT_REASONING_LEVEL },
+    // 官方规则的参数规格(推理等级 values/map、最大输出)已烘焙进模板:同源模板的
+    // 真实规格优先,模板缺失才回落默认 .* 规则——编辑弹窗默认值与原生一致。
+    optionSpecs: {
+      maxOutputTokens: meta?.optionSpecs?.maxOutputTokens ?? { max: 32000 },
+      reasoningLevel: meta?.optionSpecs?.reasoningLevel ?? DEFAULT_REASONING_LEVEL,
+    },
   };
 }
 
@@ -146,39 +151,26 @@ function catalogModelToFormModel(
   entry: EnterpriseModelMetadata,
   baseUrl: string,
 ): ProviderSettingsFormModel {
-  const hasProperties =
-    entry.contextWindow != null ||
-    entry.inputFormat != null ||
-    entry.outputFormat != null ||
-    entry.supportsToolCall != null ||
-    entry.supportsJsonSchemaOutput != null;
-  const baseline = hasProperties ? null : recommendedModelConfig(entry.id, baseUrl);
-  // 富条目(含参数规格)整体进入 config/personalConfig:personalConfig 是编辑弹窗的
-  // 真实输入源,缺了 optionSpecs 弹窗的推理等级/最大输出就没有实值或 placeholder。
-  const config: PersonalModelConfig = baseline
-    ? {
-        ...baseline,
-        ...(entry.enabled === false ? { enabled: false } : {}),
-      }
-    : {
-        ...(entry.enabled === false ? { enabled: false } : {}),
-        ...(hasProperties
-          ? {
-              properties: {
-                ...(entry.contextWindow != null ? { contextWindow: entry.contextWindow } : {}),
-                ...(entry.inputFormat != null ? { inputFormat: entry.inputFormat } : {}),
-                ...(entry.outputFormat != null ? { outputFormat: entry.outputFormat } : {}),
-                ...(entry.supportsToolCall != null
-                  ? { supportsToolCall: entry.supportsToolCall }
-                  : {}),
-                ...(entry.supportsJsonSchemaOutput != null
-                  ? { supportsJsonSchemaOutput: entry.supportsJsonSchemaOutput }
-                  : {}),
-              },
-            }
-          : {}),
-        ...(entry.optionSpecs != null ? { optionSpecs: entry.optionSpecs } : {}),
-      };
+  const baseline = recommendedModelConfig(entry.id, baseUrl);
+  // 目录值优先、缺失叶子由推荐基线补齐:原生每次编辑都跑规则引擎,等价做法是
+  // 让每个模型行(含旧模板创建、只存了部分元数据的存量行)都带上同源模板的
+  // 默认参数规格——否则弹窗的推理等级/参数映射/最大输出是空的,需要手填。
+  // personalConfig 是编辑弹窗的真实输入源,必须完整;保存时整条烘焙回目录。
+  const config: PersonalModelConfig = {
+    ...baseline,
+    ...(entry.enabled === false ? { enabled: false } : {}),
+    properties: {
+      ...baseline.properties,
+      ...(entry.contextWindow != null ? { contextWindow: entry.contextWindow } : {}),
+      ...(entry.inputFormat != null ? { inputFormat: entry.inputFormat } : {}),
+      ...(entry.outputFormat != null ? { outputFormat: entry.outputFormat } : {}),
+      ...(entry.supportsToolCall != null ? { supportsToolCall: entry.supportsToolCall } : {}),
+      ...(entry.supportsJsonSchemaOutput != null
+        ? { supportsJsonSchemaOutput: entry.supportsJsonSchemaOutput }
+        : {}),
+    },
+    optionSpecs: entry.optionSpecs ?? baseline.optionSpecs,
+  };
   return {
     kind: "candidate",
     modelId: entry.id,
