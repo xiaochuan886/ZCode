@@ -410,24 +410,40 @@ test("tenant model provider catalog API is admin-gated and never returns keys", 
     );
     assert.equal(response.status, 201);
     const second = (await response.json()) as Record<string, unknown>;
-    // 成员可读投影,无 key。
+    // 企业设置为管理员专属:成员读目录 403,就绪信号成员可读且不含目录细节。
     response = await api(
       base,
       memberSession,
       `/api/enterprise/tenants/${tenant.id}/model-providers`,
       "GET",
     );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-status`,
+      "GET",
+    );
     assert.equal(response.status, 200);
-    const memberView = (await response.json()) as Array<Record<string, unknown>>;
-    assert.equal(memberView.length, 2);
+    assert.deepEqual(await response.json(), { ready: true });
+    // 管理员读投影,无 key。
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const adminView = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(adminView.length, 2);
     assert.deepEqual(
-      memberView.map((provider) => [provider.providerKey, provider.isDefault]),
+      adminView.map((provider) => [provider.providerKey, provider.isDefault]),
       [
         ["acme", false],
         ["beta", true],
       ],
     );
-    assert.ok(memberView.every((provider) => !("apiKey" in provider)));
+    assert.ok(adminView.every((provider) => !("apiKey" in provider)));
     // PATCH 切默认。
     response = await api(
       base,
@@ -889,6 +905,79 @@ test("MCP relay streams through one Customer binding without writing the upstrea
   }
 });
 
+test("the enterprise settings read routes reject members across the whole surface", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-settings-"));
+  await writeFile(join(dir, "index.html"), "ready");
+  const store = await EnterpriseStore.open(join(dir, "data.sqlite"), join(dir, "workspaces"), {
+    modelCredentialsEncryptionKey: Buffer.alloc(32, 0x42),
+  });
+  const hash = await EnterpriseAuth.hashPassword(password);
+  const { tenant, user } = store.bootstrapAdmin("Tenant", "settings-admin@example.test", hash);
+  const member = store.provisionUser(user.id, tenant.id, {
+    email: "settings-member@example.test",
+    passwordHash: hash,
+    role: "member",
+  });
+  const customer = await store.createCustomer(user.id, tenant.id, { name: "Acme" });
+  store.createTenantSkill(user.id, tenant.id, { name: "handbook", content: "# Handbook\n" });
+  const gateway = createEnterpriseGateway({
+    store,
+    auth: new EnterpriseAuth(store),
+    runtimes: managerFor("http://127.0.0.1:9"),
+    staticRoot: dir,
+    port: 0,
+  });
+  await gateway.listen();
+  const address = gateway.server.address() as AddressInfo;
+  const base = `http://127.0.0.1:${address.port}`;
+  try {
+    const adminSession = await login(base, user.email);
+    const memberSession = await login(base, member.user.email);
+    // 设置面全部只读路由:成员 403,管理员 200。
+    const readPaths = [
+      `/api/enterprise/tenants/${tenant.id}/model-providers`,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      `/api/enterprise/tenants/${tenant.id}/skills`,
+      `/api/enterprise/tenants/${tenant.id}/importable-skills`,
+      `/api/enterprise/customers/${customer.id}/skills`,
+      `/api/enterprise/customers/${customer.id}/mcp-bindings`,
+    ];
+    for (const readPath of readPaths) {
+      const denied = await api(base, memberSession, readPath, "GET");
+      assert.equal(denied.status, 403, readPath);
+      const allowed = await api(base, adminSession, readPath, "GET");
+      assert.equal(allowed.status, 200, readPath);
+    }
+    // 工作台就绪信号是成员唯一可读的设置邻接端点:无供应商时 ready=false。
+    let response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-status`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ready: false });
+    store.createTenantModelProvider(user.id, tenant.id, {
+      providerKey: "acme",
+      displayName: "Acme",
+      apiType: "openai-chat-completions",
+      baseUrl: "https://acme.example.com/v1",
+      apiKey: "key-1234",
+      models: ["acme-a"],
+    });
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/model-status`,
+      "GET",
+    );
+    assert.deepEqual(await response.json(), { ready: true });
+  } finally {
+    await gateway.close();
+    store.close();
+  }
+});
+
 test("tenant connector API is admin-gated and relays with a stable token", async () => {
   const dir = await mkdtemp(join(tmpdir(), "enterprise-gateway-connectors-"));
   await writeFile(join(dir, "index.html"), "ready");
@@ -996,18 +1085,25 @@ test("tenant connector API is admin-gated and relays with a stable token", async
       },
     );
     assert.equal(response.status, 400);
-    // 成员可读状态投影,不含 token/secret。
+    // 企业设置为管理员专属:成员读连接器列表 403;脱敏投影改由管理员视角断言。
     response = await api(
       base,
       memberSession,
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
       "GET",
     );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
+      "GET",
+    );
     assert.equal(response.status, 200);
-    const memberView = (await response.json()) as Array<Record<string, unknown>>;
-    assert.equal(memberView.length, 1);
-    assert.equal(JSON.stringify(memberView).includes(secret), false);
-    assert.equal("token" in (memberView[0] ?? {}), false);
+    const adminView = (await response.json()) as Array<Record<string, unknown>>;
+    assert.equal(adminView.length, 1);
+    assert.equal(JSON.stringify(adminView).includes(secret), false);
+    assert.equal("token" in (adminView[0] ?? {}), false);
 
     const token = store.ensureMcpConnectorToken(connector.id);
     const relayPath = `/api/enterprise/mcp-relay/t/${connector.id}`;
@@ -1568,17 +1664,18 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       `${base}/api/enterprise/tenants/${tenant.id}/mcp-connectors/${connector.id}/callback`,
     );
 
-    // 目录按访问用户给出授权状态:A 已连接,B 未连接。
+    // 连接器列表是管理员专属读面:成员 403;按用户的授权状态以"操作者本人"为口径,
+    // 成员 A/B 的差异由下方 store 断言与中继注入行为覆盖。
     response = await api(
       base,
       sessionA,
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
       "GET",
     );
-    assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, true);
+    assert.equal(response.status, 403);
     response = await api(
       base,
-      sessionB,
+      adminSession,
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
       "GET",
     );
@@ -1705,13 +1802,14 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       body: "{}",
     });
     assert.equal(relayResponse.status, 200);
+    // 成员读列表已随设置面收紧为 403;撤销效果由上方中继 401 与 store 断言覆盖。
     response = await api(
       base,
       sessionB,
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
       "GET",
     );
-    assert.equal(((await response.json()) as Array<{ authorized: boolean }>)[0]!.authorized, false);
+    assert.equal(response.status, 403);
     // 撤销不存在的行 → 404。
     response = await api(
       base,
@@ -1720,10 +1818,10 @@ test("user-authorized connectors run the oauth flow per user and relay private t
       "DELETE",
     );
     assert.equal(response.status, 404);
-    // 令牌/密文绝不进 API 响应。
+    // 令牌/密文绝不进 API 响应(成员读已 403,扫描管理员视角的同一投影)。
     response = await api(
       base,
-      sessionA,
+      adminSession,
       `/api/enterprise/tenants/${tenant.id}/mcp-connectors`,
       "GET",
     );

@@ -232,6 +232,9 @@ export class EnterpriseStore extends EnterpriseStoreBase {
   listTenantModelProviders(actorId: string, tenantId: string): TenantModelProvider[] {
     return this.providerStore.listTenantModelProviders(actorId, tenantId);
   }
+  tenantModelReady(actorId: string, tenantId: string): boolean {
+    return this.providerStore.tenantModelReady(actorId, tenantId);
+  }
   getTenantModelProvider(actorId: string, providerId: string): TenantModelProvider {
     return this.providerStore.getTenantModelProvider(actorId, providerId);
   }

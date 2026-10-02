@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import type { EnterpriseSession, TenantModelProviderDistribution } from "./types.js";
 import { EnterpriseError, expertRuntimeId } from "./types.js";
+import { requireTenantAdmin } from "./admin-guard.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
 import { listImportableSkills, readImportableSkill } from "./skill-import.js";
 import type { TenantModelProviderInput, TenantModelProviderPatch } from "./provider-format.js";
@@ -35,15 +36,6 @@ function optionalStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
     throw new EnterpriseError("validation");
   return value as string[];
-}
-
-function requireAdmin(
-  options: EnterpriseApiRequest["options"],
-  session: EnterpriseSession,
-  tenantId: string,
-): void {
-  if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-    throw new EnterpriseError("forbidden");
 }
 
 /** 个人 Skill 名只允许受限字符集,且拒绝绝对路径与 '.'/'..' 段,防目录穿越。 */
@@ -136,14 +128,25 @@ export async function handleTenantCatalogApiRequest(
     await Promise.all(affected.map((target) => stopRuntime(target)));
   };
 
+  const modelStatus = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/model-status$/);
+  if (modelStatus && method === "GET") {
+    // 工作台就绪信号对全体成员开放:只返回 ready 布尔,不暴露供应商目录细节。
+    send(response, 200, {
+      ready: options.store.tenantModelReady(session.userId, modelStatus[1]!),
+    });
+    return true;
+  }
+
   const providerList = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/model-providers$/);
   if (providerList && method === "GET") {
+    // 企业设置为管理员专属,目录列表(含只读)对成员一律 403。
+    requireTenantAdmin(options, session, providerList[1]!);
     send(response, 200, options.store.listTenantModelProviders(session.userId, providerList[1]!));
     return true;
   }
   if (providerList && method === "POST") {
     const tenantId = providerList[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const input: TenantModelProviderInput = {
       providerKey: str(body.providerKey),
@@ -163,7 +166,7 @@ export async function handleTenantCatalogApiRequest(
   const providerItem = path.match(/^\/api\/enterprise\/model-providers\/([^/]+)$/);
   if (providerItem && method === "PATCH") {
     const current = options.store.getTenantModelProvider(session.userId, providerItem[1]!);
-    requireAdmin(options, session, current.tenantId);
+    requireTenantAdmin(options, session, current.tenantId);
     const body = await jsonBody(request);
     const patch: TenantModelProviderPatch = {
       ...(body.displayName === undefined ? {} : { displayName: optionalText(body.displayName) }),
@@ -185,7 +188,7 @@ export async function handleTenantCatalogApiRequest(
   }
   if (providerItem && method === "DELETE") {
     const current = options.store.getTenantModelProvider(session.userId, providerItem[1]!);
-    requireAdmin(options, session, current.tenantId);
+    requireTenantAdmin(options, session, current.tenantId);
     await stopTenantRuntimes(current.tenantId);
     options.store.deleteTenantModelProvider(session.userId, providerItem[1]!);
     send(response, 200, { ok: true });
@@ -193,7 +196,7 @@ export async function handleTenantCatalogApiRequest(
   }
   const providerTest = path.match(/^\/api\/enterprise\/model-providers\/([^/]+)\/test$/);
   if (providerTest && method === "POST") {
-    requireAdmin(
+    requireTenantAdmin(
       options,
       session,
       options.store.getTenantModelProvider(session.userId, providerTest[1]!).tenantId,
@@ -208,12 +211,14 @@ export async function handleTenantCatalogApiRequest(
 
   const connectorList = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/mcp-connectors$/);
   if (connectorList && method === "GET") {
+    // 同供应商目录:连接器列表为管理员专属只读面。
+    requireTenantAdmin(options, session, connectorList[1]!);
     send(response, 200, options.store.listTenantMcpConnectors(session.userId, connectorList[1]!));
     return true;
   }
   if (connectorList && method === "POST") {
     const tenantId = connectorList[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const url = str(body.url);
     if (!isTenantMcpEndpointAllowed(tenantId, url)) throw new EnterpriseError("validation");
@@ -246,7 +251,7 @@ export async function handleTenantCatalogApiRequest(
   const connectorItem = path.match(/^\/api\/enterprise\/mcp-connectors\/([^/]+)$/);
   if (connectorItem && method === "PATCH") {
     const current = options.store.getTenantMcpConnector(session.userId, connectorItem[1]!);
-    requireAdmin(options, session, current.tenantId);
+    requireTenantAdmin(options, session, current.tenantId);
     const body = await jsonBody(request);
     if (body.url !== undefined && !isTenantMcpEndpointAllowed(current.tenantId, text(body.url)))
       throw new EnterpriseError("validation");
@@ -283,7 +288,7 @@ export async function handleTenantCatalogApiRequest(
   }
   if (connectorItem && method === "DELETE") {
     const current = options.store.getTenantMcpConnector(session.userId, connectorItem[1]!);
-    requireAdmin(options, session, current.tenantId);
+    requireTenantAdmin(options, session, current.tenantId);
     await stopTenantRuntimes(current.tenantId);
     options.store.deleteTenantMcpConnector(session.userId, connectorItem[1]!);
     send(response, 200, { ok: true });
@@ -293,7 +298,7 @@ export async function handleTenantCatalogApiRequest(
   const importableSkills = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/importable-skills$/);
   if (importableSkills && method === "GET") {
     const tenantId = importableSkills[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const importedNames = new Set(
       options.store.listTenantSkills(session.userId, tenantId).map((skill) => skill.name),
     );
@@ -316,7 +321,7 @@ export async function handleTenantCatalogApiRequest(
   const skillImport = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/skills\/import$/);
   if (skillImport && method === "POST") {
     const tenantId = skillImport[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const name = validatePersonalSkillName(str(body.name));
     if (body.origin !== "home" && body.origin !== "workspace")

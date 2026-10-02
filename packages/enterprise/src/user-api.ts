@@ -2,19 +2,11 @@ import { EnterpriseAuth } from "./auth.js";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import type { EnterpriseSession, Role, UserStatus } from "./types.js";
 import { EnterpriseError } from "./types.js";
+import { requireTenantAdmin } from "./admin-guard.js";
 
 function text(value: unknown): string {
   if (typeof value !== "string") throw new EnterpriseError("validation");
   return value;
-}
-
-function requireAdmin(
-  options: EnterpriseApiRequest["options"],
-  session: EnterpriseSession,
-  tenantId: string,
-): void {
-  if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-    throw new EnterpriseError("forbidden");
 }
 
 function parseRole(value: unknown): Role {
@@ -54,13 +46,13 @@ export async function handleUserApiRequest(
   const userList = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/users$/);
   if (userList && method === "GET") {
     const tenantId = userList[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     send(response, 200, options.store.listTenantUsers(session.userId, tenantId));
     return true;
   }
   if (userList && method === "POST") {
     const tenantId = userList[1]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const email = str(body.email);
     // 密码只在创建全新全局身份时必需;join 语义下已存在的身份沿用自有凭据。
@@ -83,7 +75,7 @@ export async function handleUserApiRequest(
   if (userAccess && method === "PUT") {
     const tenantId = userAccess[1]!;
     const memberUserId = userAccess[2]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const mode = text(body.mode);
     const customerIds = optionalStringArray(body.customerIds);
@@ -106,7 +98,7 @@ export async function handleUserApiRequest(
   if (userItem && method === "PATCH") {
     const tenantId = userItem[1]!;
     const memberUserId = userItem[2]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     const body = await jsonBody(request);
     const before = options.store.getTenantUser(session.userId, tenantId, memberUserId);
     const passwordHash =
@@ -134,7 +126,7 @@ export async function handleUserApiRequest(
   if (userItem && method === "DELETE") {
     const tenantId = userItem[1]!;
     const memberUserId = userItem[2]!;
-    requireAdmin(options, session, tenantId);
+    requireTenantAdmin(options, session, tenantId);
     options.store.removeTenantUser(session.userId, tenantId, memberUserId);
     closeUserSockets(memberUserId);
     await stopMemberRuntimes(tenantId, memberUserId);

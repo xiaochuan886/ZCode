@@ -107,6 +107,20 @@ export class ProviderStoreSupport extends EnterpriseStoreBase {
     ).map((row) => this.projection(this.row(row)));
   }
 
+  /**
+   * 工作台模型就绪信号:成员可读,只返回租户是否存在启用供应商。
+   * 供应商目录列表是管理员专属,工作台门控因此改走这个不泄露目录细节的端点。
+   */
+  tenantModelReady(actorId: string, tenantId: string): boolean {
+    this.membership(actorId, tenantId);
+    return (
+      this.one(
+        "SELECT 1 FROM tenant_model_providers WHERE tenant_id=? AND enabled=1 LIMIT 1",
+        tenantId,
+      ) !== undefined
+    );
+  }
+
   getTenantModelProvider(actorId: string, providerId: string): TenantModelProvider {
     const row = this.byId(providerId);
     this.membership(actorId, row.tenantId);

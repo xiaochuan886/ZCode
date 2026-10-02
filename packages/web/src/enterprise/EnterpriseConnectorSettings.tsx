@@ -1,31 +1,29 @@
 import { useCallback, useEffect, useState } from "react";
-import { createEnterpriseClient, type TenantMcpConnectorPatch, type TenantMcpConnectorView } from "./api.js";
-import { badge, button, chip, primary, zh } from "./presentation.js";
 import {
-  EnterpriseConnectorForm,
-  type ConnectorFormValue,
-} from "./EnterpriseConnectorForm.js";
+  createEnterpriseClient,
+  type TenantMcpConnectorPatch,
+  type TenantMcpConnectorView,
+} from "./api.js";
+import { badge, button, chip, primary, zh } from "./presentation.js";
+import { EnterpriseConnectorForm, type ConnectorFormValue } from "./EnterpriseConnectorForm.js";
 
 const api = createEnterpriseClient();
 
 type ConnectorFormTarget = { mode: "create" } | { mode: "edit"; connector: TenantMcpConnectorView };
 
 /**
- * 连接器 tab:租户级 MCP 连接器目录。管理员增删改与启停;成员只读目录,但可以
- * 连接/断开自己的 user-oauth 授权(后端对非管理员变更返回 403,表单对成员隐藏)。
+ * 连接器 tab:租户级 MCP 连接器目录(管理员专属页面内的分区)。增删改与启停;
+ * user-oauth 的连接/断开作用于操作者本人账号,当前也仅能从这里(管理员)触达。
  */
 export function EnterpriseConnectorSettings({
   t,
   tenantId,
-  role,
   csrfToken,
 }: {
   t: typeof zh;
   tenantId: string;
-  role: "admin" | "member";
   csrfToken: string | null;
 }) {
-  const isAdmin = role === "admin";
   const [connectors, setConnectors] = useState<TenantMcpConnectorView[]>([]);
   const [failed, setFailed] = useState(false);
   const [form, setForm] = useState<ConnectorFormTarget | null>(null);
@@ -138,9 +136,7 @@ export function EnterpriseConnectorSettings({
   return (
     <section className="flex flex-col gap-4">
       <h1 className="text-ui-xl font-medium">{t.connectors}</h1>
-      <p className="max-w-2xl text-ui-sm text-foreground-subtle">
-        {isAdmin ? t.connectorHint : t.connectorMemberHint}
-      </p>
+      <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.connectorHint}</p>
       {failed ? (
         <p className="text-ui-sm text-destructive" role="alert">
           {t.loadFailed}
@@ -151,14 +147,14 @@ export function EnterpriseConnectorSettings({
           {error}
         </p>
       ) : null}
-      {isAdmin && !form ? (
+      {!form ? (
         <div>
           <button type="button" className={primary} onClick={() => setForm({ mode: "create" })}>
             {t.newConnector}
           </button>
         </div>
       ) : null}
-      {isAdmin && form ? (
+      {form ? (
         <EnterpriseConnectorForm
           key={form.mode === "edit" ? form.connector.id : "create"}
           t={t}
@@ -188,9 +184,7 @@ export function EnterpriseConnectorSettings({
                 {connector.authMode === "user-oauth" ? (
                   <span
                     className={
-                      connector.authorized
-                        ? badge
-                        : `${badge} border-destructive text-destructive`
+                      connector.authorized ? badge : `${badge} border-destructive text-destructive`
                     }
                   >
                     {connector.authorized ? t.connectorConnected : t.connectorNotConnected}
@@ -235,34 +229,32 @@ export function EnterpriseConnectorSettings({
                   )}
                 </div>
               ) : null}
-              {isAdmin ? (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={busy}
-                    onClick={() => setForm({ mode: "edit", connector })}
-                  >
-                    {t.edit}
-                  </button>
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={busy}
-                    onClick={() => toggleEnabled(connector)}
-                  >
-                    {connector.enabled ? t.disableAction : t.enableAction}
-                  </button>
-                  <button
-                    type="button"
-                    className={button}
-                    disabled={busy}
-                    onClick={() => removeConnector(connector)}
-                  >
-                    {t.deleteAction}
-                  </button>
-                </div>
-              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={button}
+                  disabled={busy}
+                  onClick={() => setForm({ mode: "edit", connector })}
+                >
+                  {t.edit}
+                </button>
+                <button
+                  type="button"
+                  className={button}
+                  disabled={busy}
+                  onClick={() => toggleEnabled(connector)}
+                >
+                  {connector.enabled ? t.disableAction : t.enableAction}
+                </button>
+                <button
+                  type="button"
+                  className={button}
+                  disabled={busy}
+                  onClick={() => removeConnector(connector)}
+                >
+                  {t.deleteAction}
+                </button>
+              </div>
             </li>
           ))}
         </ul>

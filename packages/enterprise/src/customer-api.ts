@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import type { EnterpriseSession } from "./types.js";
 import { EnterpriseError } from "./types.js";
+import { requireTenantAdmin } from "./admin-guard.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
 import { materializeCustomer } from "./gateway-prepare.js";
 
@@ -37,8 +38,7 @@ export async function handleCustomerApiRequest(
     // 客户目录是管理员资产:创建/更新/删除仅租户管理员可操作。
     const body = await jsonBody(request);
     const tenantId = str(body.tenantId);
-    if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-      throw new EnterpriseError("forbidden");
+    requireTenantAdmin(options, session, tenantId);
     const metadata =
       body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
         ? (body.metadata as Record<string, unknown>)
@@ -63,8 +63,7 @@ export async function handleCustomerApiRequest(
   const customerMatch = path.match(/^\/api\/enterprise\/customers\/([^/]+)$/);
   if (customerMatch && method === "PATCH") {
     const current = options.store.getCustomer(session.userId, customerMatch[1]!);
-    if (options.store.getMembership(session.userId, current.tenantId).role !== "admin")
-      throw new EnterpriseError("forbidden");
+    requireTenantAdmin(options, session, current.tenantId);
     const body = await jsonBody(request);
     const metadata =
       body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
@@ -88,8 +87,7 @@ export async function handleCustomerApiRequest(
   }
   if (customerMatch && method === "DELETE") {
     const current = options.store.getCustomer(session.userId, customerMatch[1]!);
-    if (options.store.getMembership(session.userId, current.tenantId).role !== "admin")
-      throw new EnterpriseError("forbidden");
+    requireTenantAdmin(options, session, current.tenantId);
     const affected = runtimeTargetsForTenant(options.store, session.userId, current.tenantId);
     await Promise.all(affected.map((target) => stopRuntime(target)));
     const { workspacePath } = options.store.deleteCustomer(session.userId, current.id);
@@ -113,13 +111,15 @@ export async function handleCustomerApiRequest(
   }
   const customerSkills = path.match(/^\/api\/enterprise\/customers\/([^/]+)\/skills$/);
   if (customerSkills && method === "GET") {
-    send(response, 200, options.store.listSkillsForCustomer(session.userId, customerSkills[1]!));
+    // 设置面只读接口:企业设置为管理员专属(列表仅供设置页使用)。
+    const customer = options.store.getCustomer(session.userId, customerSkills[1]!);
+    requireTenantAdmin(options, session, customer.tenantId);
+    send(response, 200, options.store.listSkillsForCustomer(session.userId, customer.id));
     return true;
   }
   if (customerSkills && method === "POST") {
     const customer = options.store.getCustomer(session.userId, customerSkills[1]!);
-    if (options.store.getMembership(session.userId, customer.tenantId).role !== "admin")
-      throw new EnterpriseError("forbidden");
+    requireTenantAdmin(options, session, customer.tenantId);
     const body = await jsonBody(request);
     options.store.createCustomerSkill(session.userId, customer.id, {
       name: str(body.name),
@@ -138,18 +138,19 @@ export async function handleCustomerApiRequest(
   }
   const customerMcp = path.match(/^\/api\/enterprise\/customers\/([^/]+)\/mcp-bindings$/);
   if (customerMcp && method === "GET") {
-    // 令牌只留在服务端;浏览器拿到的是脱敏投影。
+    // 设置面只读接口:管理员专属;令牌只留在服务端,浏览器拿到的是脱敏投影。
+    const customer = options.store.getCustomer(session.userId, customerMcp[1]!);
+    requireTenantAdmin(options, session, customer.tenantId);
     send(response, 200, {
       items: options.store
-        .listMcpBindingsForCustomer(session.userId, customerMcp[1]!)
+        .listMcpBindingsForCustomer(session.userId, customer.id)
         .map(({ token: _token, ...binding }) => binding),
     });
     return true;
   }
   if (customerMcp && method === "POST") {
     const customer = options.store.getCustomer(session.userId, customerMcp[1]!);
-    if (options.store.getMembership(session.userId, customer.tenantId).role !== "admin")
-      throw new EnterpriseError("forbidden");
+    requireTenantAdmin(options, session, customer.tenantId);
     const body = await jsonBody(request);
     const secretRef = body.secretRef == null ? null : str(body.secretRef);
     if (secretRef && !isTenantMcpSecretRef(secretRef, customer.tenantId))

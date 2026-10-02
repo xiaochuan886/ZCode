@@ -36,21 +36,18 @@ function baseUrlHost(url: string): string {
 }
 
 /**
- * 模型设置 tab = 供应商目录管理。管理员增删改、设默认、启停与连接测试;
- * 成员只读(后端对非管理员变更返回 403,这里直接隐藏表单并给出提示)。
+ * 模型设置 tab = 供应商目录管理(管理员专属页面内的分区):
+ * 增删改、设默认、启停与连接测试;成员根本进不了企业设置,无需只读形态。
  */
 export function EnterpriseModelProviderSettings({
   t,
   tenantId,
-  role,
   csrfToken,
 }: {
   t: typeof zh;
   tenantId: string;
-  role: "admin" | "member";
   csrfToken: string | null;
 }) {
-  const isAdmin = role === "admin";
   const [providers, setProviders] = useState<ModelProviderView[]>([]);
   const [failed, setFailed] = useState(false);
   const [form, setForm] = useState<ProviderFormTarget | null>(null);
@@ -177,9 +174,7 @@ export function EnterpriseModelProviderSettings({
   return (
     <section className="flex flex-col gap-4">
       <h1 className="text-ui-xl font-medium">{t.modelSettings}</h1>
-      <p className="max-w-2xl text-ui-sm text-foreground-subtle">
-        {isAdmin ? t.modelProviderHint : t.modelProviderMemberHint}
-      </p>
+      <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.modelProviderHint}</p>
       {failed ? (
         <p className="text-ui-sm text-destructive" role="alert">
           {t.loadFailed}
@@ -190,14 +185,14 @@ export function EnterpriseModelProviderSettings({
           {error}
         </p>
       ) : null}
-      {isAdmin && !form ? (
+      {!form ? (
         <div>
           <button type="button" className={primary} onClick={() => setForm({ mode: "create" })}>
             {t.newModelProvider}
           </button>
         </div>
       ) : null}
-      {isAdmin && form ? (
+      {form ? (
         <EnterpriseModelProviderForm
           key={form.mode === "edit" ? form.provider.id : "create"}
           t={t}
@@ -250,50 +245,48 @@ export function EnterpriseModelProviderSettings({
                     ))
                   )}
                 </div>
-                {isAdmin ? (
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={busy}
-                      onClick={() => setForm({ mode: "edit", provider })}
-                    >
-                      {t.edit}
-                    </button>
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={busy || provider.isDefault}
-                      onClick={() => markDefault(provider)}
-                    >
-                      {t.setDefaultAction}
-                    </button>
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={busy}
-                      onClick={() => toggleEnabled(provider)}
-                    >
-                      {provider.enabled ? t.disableAction : t.enableAction}
-                    </button>
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={test?.running}
-                      onClick={() => testProvider(provider)}
-                    >
-                      {test?.running ? t.testing : t.testConnection}
-                    </button>
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={busy}
-                      onClick={() => removeProvider(provider)}
-                    >
-                      {t.deleteAction}
-                    </button>
-                  </div>
-                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={busy}
+                    onClick={() => setForm({ mode: "edit", provider })}
+                  >
+                    {t.edit}
+                  </button>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={busy || provider.isDefault}
+                    onClick={() => markDefault(provider)}
+                  >
+                    {t.setDefaultAction}
+                  </button>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={busy}
+                    onClick={() => toggleEnabled(provider)}
+                  >
+                    {provider.enabled ? t.disableAction : t.enableAction}
+                  </button>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={test?.running}
+                    onClick={() => testProvider(provider)}
+                  >
+                    {test?.running ? t.testing : t.testConnection}
+                  </button>
+                  <button
+                    type="button"
+                    className={button}
+                    disabled={busy}
+                    onClick={() => removeProvider(provider)}
+                  >
+                    {t.deleteAction}
+                  </button>
+                </div>
                 {test && !test.running ? (
                   test.ok ? (
                     <p className="text-ui-xs text-foreground-subtle" role="status">

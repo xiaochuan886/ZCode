@@ -1,31 +1,32 @@
 import { useCallback, useEffect, useState } from "react";
-import { createEnterpriseClient, type ModelProviderView } from "./api.js";
+import { createEnterpriseClient } from "./api.js";
 
 const api = createEnterpriseClient();
 
 /**
- * 模型就绪判定基于供应商目录:列表中存在 enabled 的供应商即视为就绪,
- * 供 EnterpriseApp 的 modelReady 门控使用(旧的单凭据状态接口已随目录方案下线)。
+ * 模型就绪判定走成员可读的 model-status 信号(只含 ready 布尔):
+ * 供应商目录列表是企业设置数据,已收紧为管理员专属,工作台门控不得依赖它。
  */
 export function useTenantModelStatus(
   userId: string | undefined,
   tenantId: string,
   setError: (message: string) => void,
 ) {
-  const [providers, setProviders] = useState<ModelProviderView[]>([]);
+  const [ready, setReady] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!userId || !tenantId) {
-      setProviders([]);
+      setReady(false);
       setLoaded(false);
       return;
     }
     try {
-      setProviders(await api.modelProviders(tenantId));
+      const status = await api.modelStatus(tenantId);
+      setReady(status.ready);
       setLoaded(true);
     } catch (cause) {
-      setProviders([]);
+      setReady(false);
       setLoaded(true);
       setError(String(cause));
     }
@@ -35,18 +36,18 @@ export function useTenantModelStatus(
     let stale = false;
     setLoaded(false);
     if (!userId || !tenantId) {
-      setProviders([]);
+      setReady(false);
       return;
     }
-    void api.modelProviders(tenantId).then(
-      (next) => {
+    void api.modelStatus(tenantId).then(
+      (status) => {
         if (stale) return;
-        setProviders(next);
+        setReady(status.ready);
         setLoaded(true);
       },
       (cause: unknown) => {
         if (stale) return;
-        setProviders([]);
+        setReady(false);
         setLoaded(true);
         setError(String(cause));
       },
@@ -57,7 +58,7 @@ export function useTenantModelStatus(
   }, [userId, tenantId, setError]);
 
   return {
-    modelReady: providers.some((provider) => provider.enabled),
+    modelReady: ready,
     modelStatusLoaded: loaded,
     refresh,
   };

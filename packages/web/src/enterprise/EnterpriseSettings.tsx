@@ -10,15 +10,14 @@ import { button, field, primary, zh } from "./presentation.js";
 const api = createEnterpriseClient();
 
 /**
- * 企业设置页(壳层):客户目录、共享 Skill 与连接器/模型供应商目录按角色分区,
- * 管理类变更仅租户管理员可见;专家日常入口在原生侧边栏,不经过此页。
+ * 企业设置页(壳层):管理员专属页面,成员侧没有任何入口能打开它
+ * (EnterpriseApp 以 isAdmin 门控渲染);专家日常入口在原生侧边栏,不经过此页。
  */
 export function EnterpriseSettings({
   t,
   bootstrap,
   tenantId,
   tenantName,
-  role,
   csrfToken,
   busy,
   customers,
@@ -31,7 +30,6 @@ export function EnterpriseSettings({
   bootstrap: { user: EnterpriseUser | null; tenants: Tenant[] };
   tenantId: string;
   tenantName: string;
-  role: "admin" | "member";
   csrfToken: string | null;
   busy: boolean;
   customers: Customer[];
@@ -40,7 +38,6 @@ export function EnterpriseSettings({
   onLogout: () => void;
   onTenantChange: (tenantId: string) => void;
 }) {
-  const isAdmin = role === "admin";
   const [view, setView] = useState<
     "overview" | "customers" | "users" | "skills" | "model" | "connectors"
   >("overview");
@@ -96,11 +93,11 @@ export function EnterpriseSettings({
     });
   }
 
-  const tabs: Array<{ id: typeof view; label: string; adminOnly?: boolean }> = [
+  const tabs: Array<{ id: typeof view; label: string }> = [
     { id: "overview", label: t.settingsOverview },
-    { id: "customers", label: t.customers, adminOnly: true },
-    { id: "users", label: t.users, adminOnly: true },
-    { id: "skills", label: t.sharedSkills, adminOnly: true },
+    { id: "customers", label: t.customers },
+    { id: "users", label: t.users },
+    { id: "skills", label: t.sharedSkills },
     { id: "model", label: t.modelSettings },
     { id: "connectors", label: t.connectors },
   ];
@@ -130,8 +127,7 @@ export function EnterpriseSettings({
         ) : null}
         <div className="ml-auto flex items-center gap-2">
           <span className="hidden max-w-48 truncate text-ui-caption text-foreground-subtle sm:inline">
-            {bootstrap.user?.displayName || bootstrap.user?.email} ·{" "}
-            {isAdmin ? t.roleAdmin : t.roleMember}
+            {bootstrap.user?.displayName || bootstrap.user?.email} · {t.roleAdmin}
           </span>
           <button type="button" className={button} onClick={onLogout} disabled={busy}>
             {t.logout}
@@ -143,22 +139,20 @@ export function EnterpriseSettings({
       </header>
       <div className="flex min-h-0 flex-1">
         <nav className="flex w-44 shrink-0 flex-col gap-1 border-r border-border p-2">
-          {tabs
-            .filter((tab) => !tab.adminOnly || isAdmin)
-            .map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={
-                  view === tab.id
-                    ? "rounded-lg bg-selected px-3 py-2 text-left text-ui-base text-foreground"
-                    : "rounded-lg px-3 py-2 text-left text-ui-base text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
-                }
-                onClick={() => setView(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={
+                view === tab.id
+                  ? "rounded-lg bg-selected px-3 py-2 text-left text-ui-base text-foreground"
+                  : "rounded-lg px-3 py-2 text-left text-ui-base text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+              }
+              onClick={() => setView(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
         </nav>
         <main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
           {actionError ? (
@@ -185,7 +179,7 @@ export function EnterpriseSettings({
               </ul>
             </section>
           ) : null}
-          {view === "customers" && isAdmin ? (
+          {view === "customers" ? (
             <section className="flex flex-col gap-4">
               <h1 className="text-ui-xl font-medium">{t.customers}</h1>
               <p className="max-w-2xl text-ui-sm text-foreground-subtle">{t.customerAdminHint}</p>
@@ -252,10 +246,10 @@ export function EnterpriseSettings({
               </ul>
             </section>
           ) : null}
-          {view === "skills" && isAdmin ? (
+          {view === "skills" ? (
             <EnterpriseSkillSettings t={t} tenantId={tenantId} csrfToken={csrfToken} />
           ) : null}
-          {view === "users" && isAdmin ? (
+          {view === "users" ? (
             <EnterpriseUserSettings
               t={t}
               tenantId={tenantId}
@@ -264,20 +258,10 @@ export function EnterpriseSettings({
             />
           ) : null}
           {view === "model" ? (
-            <EnterpriseModelProviderSettings
-              t={t}
-              tenantId={tenantId}
-              role={role}
-              csrfToken={csrfToken}
-            />
+            <EnterpriseModelProviderSettings t={t} tenantId={tenantId} csrfToken={csrfToken} />
           ) : null}
           {view === "connectors" ? (
-            <EnterpriseConnectorSettings
-              t={t}
-              tenantId={tenantId}
-              role={role}
-              csrfToken={csrfToken}
-            />
+            <EnterpriseConnectorSettings t={t} tenantId={tenantId} csrfToken={csrfToken} />
           ) : null}
         </main>
       </div>

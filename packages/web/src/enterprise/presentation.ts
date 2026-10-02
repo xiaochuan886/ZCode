@@ -7,6 +7,7 @@ export const zh = {
   modelSettings: "租户模型设置",
   modelSetupTitle: "租户模型设置",
   modelSetupHint: "管理员在这里配置租户的 AI 服务。保存后，客户工作区可以使用同一个模型连接。",
+  modelSetupContactAdmin: "模型尚未就绪，请联系租户管理员在企业设置中配置。",
   logout: "退出",
   retry: "重试",
   loading: "正在加载…",
@@ -61,7 +62,6 @@ export const zh = {
   loadFailed: "加载失败",
   modelProviderHint:
     "维护租户的模型供应商目录。启用的供应商会分发到各专家运行时;修改后运行时在下次打开时更新。",
-  modelProviderMemberHint: "模型供应商由租户管理员统一配置。",
   newModelProvider: "新增供应商",
   providerKey: "Provider Key",
   providerKeyHint: "创建后不可修改。",
@@ -91,7 +91,6 @@ export const zh = {
   connectors: "连接器",
   connectorHint:
     "租户级 MCP 连接器(系统内置)。启用的连接器会写入各专家运行时;修改后运行时在下次打开时更新。",
-  connectorMemberHint: "连接器由租户管理员统一配置。",
   newConnector: "新增连接器",
   connectorKey: "连接器 Key",
   connectorKeyHint: "创建后不可修改。",
@@ -160,6 +159,8 @@ export const en = {
   modelSetupTitle: "Tenant model settings",
   modelSetupHint:
     "An administrator configures the tenant AI service here. Customer workspaces can use the same model connection after it is saved.",
+  modelSetupContactAdmin:
+    "The model isn't ready yet. Contact your tenant admin to configure it in enterprise settings.",
   logout: "Sign out",
   retry: "Retry",
   loading: "Loading…",
@@ -217,7 +218,6 @@ export const en = {
   loadFailed: "Failed to load",
   modelProviderHint:
     "Maintain the tenant's model provider catalog. Enabled providers are distributed to expert runtimes; runtimes refresh on next open.",
-  modelProviderMemberHint: "Model providers are configured by the tenant admin.",
   newModelProvider: "New provider",
   providerKey: "Provider key",
   providerKeyHint: "Immutable after creation.",
@@ -248,7 +248,6 @@ export const en = {
   connectors: "Connectors",
   connectorHint:
     "Tenant MCP connectors (system built-in). Enabled connectors are written into expert runtimes; runtimes refresh on next open.",
-  connectorMemberHint: "Connectors are configured by the tenant admin.",
   newConnector: "New connector",
   connectorKey: "Connector key",
   connectorKeyHint: "Immutable after creation.",

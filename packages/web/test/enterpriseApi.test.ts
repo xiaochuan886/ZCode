@@ -159,6 +159,16 @@ test("model provider mutations use the id scoped routes", async () => {
   ]);
 });
 
+test("model status reads the member-ready signal instead of the admin catalog", async () => {
+  const calls: { url: string[] }[] = [];
+  const client = createEnterpriseClient(async (url) => {
+    calls.push({ url: [String(url)] });
+    return new Response(JSON.stringify({ ready: true }), { status: 200 });
+  });
+  assert.deepEqual(await client.modelStatus("tenant-1"), { ready: true });
+  assert.deepEqual(calls, [{ url: ["/api/enterprise/tenants/tenant-1/model-status"] }]);
+});
+
 test("connector and skill import mutations hit their tenant and id routes", async () => {
   const calls: { url: string; method: string | undefined; body: unknown; csrf: string | null }[] =
     [];

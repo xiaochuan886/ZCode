@@ -1,4 +1,4 @@
-import { EnterpriseError } from "./types.js";
+import { requireTenantAdmin } from "./admin-guard.js";
 import type { EnterpriseApiRequest } from "./gateway-types.js";
 import { handleCustomerApiRequest } from "./customer-api.js";
 import { handleConnectorOauthApiRequest } from "./connector-oauth-api.js";
@@ -40,6 +40,8 @@ export async function handleEnterpriseApiRequest(
     if (await handleUserApiRequest(dependencies, session)) return;
     const tenantSkills = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/skills$/);
     if (tenantSkills && method === "GET") {
+      // 企业设置为管理员专属:租户共享 Skill 列表对成员 403。
+      requireTenantAdmin(options, session, tenantSkills[1]!);
       send(response, 200, {
         items: options.store.listTenantSkills(session.userId, tenantSkills[1]!),
       });
@@ -47,8 +49,7 @@ export async function handleEnterpriseApiRequest(
     }
     if (tenantSkills && method === "POST") {
       const tenantId = tenantSkills[1]!;
-      if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-        throw new EnterpriseError("forbidden");
+      requireTenantAdmin(options, session, tenantId);
       const body = await jsonBody(request);
       // 租户 Skill 分发进每个专家 HOME;先停该租户专家 runtime,下次打开时重新物化。
       const affectedTargets = runtimeTargetsForTenant(options.store, session.userId, tenantId);
@@ -66,8 +67,7 @@ export async function handleEnterpriseApiRequest(
     const tenantSkillItem = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/skills\/([^/]+)$/);
     if (tenantSkillItem && method === "DELETE") {
       const tenantId = tenantSkillItem[1]!;
-      if (options.store.getMembership(session.userId, tenantId).role !== "admin")
-        throw new EnterpriseError("forbidden");
+      requireTenantAdmin(options, session, tenantId);
       const affectedTargets = runtimeTargetsForTenant(options.store, session.userId, tenantId);
       await Promise.all(affectedTargets.map((affected) => stopRuntime(affected)));
       options.store.deleteTenantSkill(session.userId, tenantId, tenantSkillItem[2]!);

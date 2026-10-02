@@ -52,6 +52,8 @@ export function EnterpriseApp({
   });
 
   const selectedTenant = bootstrap.tenants.find((tenant) => tenant.id === tenantId);
+  // 企业设置为管理员专属页面:成员侧所有入口都按此隐藏。
+  const isAdmin = selectedTenant?.role === "admin";
   const activeCustomer = bootstrap.activeCustomer;
   const runtimeKey = bootstrap.user ? `${bootstrap.user.id}:${tenantId}` : null;
 
@@ -174,6 +176,9 @@ export function EnterpriseApp({
     disconnect();
     setTenantId(nextTenantId);
     setCustomers([]);
+    // 设置页随身份收紧:切到非管理员身份的租户时立即关闭已打开的企业设置。
+    if (!bootstrap.tenants.some((tenant) => tenant.id === nextTenantId && tenant.role === "admin"))
+      setSettingsOpen(false);
     void refresh().catch((cause: unknown) => setError(String(cause)));
   }
 
@@ -188,8 +193,7 @@ export function EnterpriseApp({
 
   const enterpriseContext = useMemo(() => {
     if (!bootstrap.user) return undefined;
-    // 导入租户共享 Skill 是管理员动作(requireAdmin);成员侧不提供分享入口。
-    const canShareSkills = selectedTenant?.role === "admin";
+    // 导入租户共享 Skill 与企业设置入口都是管理员动作;成员侧不提供。
     return {
       user: {
         id: bootstrap.user.id,
@@ -214,9 +218,9 @@ export function EnterpriseApp({
         if (customer) activateBookkeeping(customer.id);
       },
       onSelectTenant: changeTenant,
-      onOpenCustomerHome: () => setSettingsOpen(true),
+      ...(isAdmin ? { onOpenCustomerHome: () => setSettingsOpen(true) } : {}),
       onLogout: logout,
-      ...(canShareSkills
+      ...(isAdmin
         ? {
             onShareSkillToTenant: async (skill: { name: string; sourcePath: string }) => {
               if (!tenantId) return;
@@ -320,34 +324,40 @@ export function EnterpriseApp({
           <div className="mx-auto flex min-h-full max-w-xl flex-col items-start justify-center gap-4 p-6">
             <h1 className="text-ui-xl font-medium">{t.modelSetupTitle}</h1>
             <p className="text-ui-sm text-foreground-subtle">{t.modelSetupHint}</p>
-            <button
-              type="button"
-              className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
-              onClick={() => setSettingsOpen(true)}
-            >
-              {t.modelSettings}
-            </button>
+            {isAdmin ? (
+              <button
+                type="button"
+                className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
+                onClick={() => setSettingsOpen(true)}
+              >
+                {t.modelSettings}
+              </button>
+            ) : (
+              // 成员无权进入企业设置:只提示联系管理员,不提供入口。
+              <p className="text-ui-sm text-foreground-subtle">{t.modelSetupContactAdmin}</p>
+            )}
           </div>
         )
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
           <p className="text-ui-base text-foreground-subtle">{t.noCustomer}</p>
-          <button
-            type="button"
-            className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
-            onClick={() => setSettingsOpen(true)}
-          >
-            {t.openSettings}
-          </button>
+          {isAdmin ? (
+            <button
+              type="button"
+              className="rounded-lg border border-border bg-surface px-3 py-2 text-ui-base text-foreground hover:bg-surface-hover"
+              onClick={() => setSettingsOpen(true)}
+            >
+              {t.openSettings}
+            </button>
+          ) : null}
         </div>
       )}
-      {settingsOpen ? (
+      {settingsOpen && isAdmin ? (
         <EnterpriseSettings
           t={t}
           bootstrap={bootstrap}
           tenantId={tenantId}
           tenantName={selectedTenant?.name ?? t.select}
-          role={selectedTenant?.role ?? "member"}
           csrfToken={bootstrap.csrfToken}
           busy={busy}
           customers={customers}
