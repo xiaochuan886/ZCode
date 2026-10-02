@@ -17,7 +17,20 @@ export { SettingsSegmentedTabs } from "./settings/SettingsSegmentedTabs.js";
 // (不携带服务 hooks,行内文案走 useZCodeIntl),SettingsResourceList 提供
 // surface 圆角列表容器与分隔线。additive 导出,原生用法不变。
 export { SkillResourceRow } from "./settings/SkillResourceRow.js";
-export { SettingsResourceList } from "./settings/SettingsResourceGroup.js";
+// Skill tab 第二轮对齐:组头/头部动作按钮/空态与弹窗原语同样是纯展示层,additive 导出。
+export {
+  SettingsResourceGroupHeader,
+  SettingsResourceList,
+} from "./settings/SettingsResourceGroup.js";
+export { SettingsResourceHeaderActions } from "./settings/SettingsResourceHeaderActions.js";
+export { PluginInstallEmptyState } from "./settings/PluginInstallEmptyState.js";
+export {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./components/ui/dialog.js";
 export { Input } from "./components/ui/input.js";
 // 原生展示组件内的 ControlHintTooltip 依赖 TooltipProvider 上下文(原生 Root 内挂载,
 // 企业设置浮层在其外),导出供企业侧就近补挂。additive,原生用法不变。
