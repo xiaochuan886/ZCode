@@ -6,6 +6,7 @@ import type {
   EnterpriseBootstrap,
   ImportableTenantSkillView,
   ImportedTenantSkill,
+  PresetSkillView,
   ModelProviderInput,
   ModelProviderPatch,
   ModelProviderTestResult,
@@ -197,6 +198,8 @@ export function createEnterpriseClient(fetcher: Fetch = fetch) {
       request<ImportableTenantSkillView[]>(
         `/tenants/${encodeURIComponent(tenantId)}/importable-skills`,
       ),
+    presetSkills: (tenantId: string) =>
+      request<PresetSkillView[]>(`/tenants/${encodeURIComponent(tenantId)}/preset-skills`),
     importTenantSkill: (tenantId: string, input: TenantSkillImportInput, token: string | null) =>
       post<ImportedTenantSkill>(
         `/tenants/${encodeURIComponent(tenantId)}/skills/import`,

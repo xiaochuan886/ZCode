@@ -1,5 +1,7 @@
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parseSkillDescription } from "./skill-import.js";
 import { digestTree, listChildDirectories, syncSeededUnit } from "./seed-sync.js";
 
 const bundledSeedRoot = fileURLToPath(new URL("../runtime-seed/skills", import.meta.url));
@@ -43,6 +45,36 @@ let bundledDigestCache: Map<string, string> | undefined;
  * 改过或没有标记的个人目录绝不覆盖。种子/刷新核心与基线插件种子共用
  * seed-sync.ts。
  */
+export interface BaselineSkillView {
+  name: string;
+  description: string;
+}
+
+let baselineListingCache: BaselineSkillView[] | undefined;
+
+/**
+ * 系统预置 Skill 清单(只读展示面):直接读捆绑 seed 目录,不落任何业务表。
+ * 与 digest 缓存同理,捆绑树在进程内不变,清单只解析一次。
+ */
+export async function listBaselineSkills(): Promise<BaselineSkillView[]> {
+  if (baselineListingCache) return baselineListingCache;
+  const listing: BaselineSkillView[] = [];
+  for (const name of await listChildDirectories(bundledSeedRoot)) {
+    let description = "";
+    try {
+      description = parseSkillDescription(
+        await readFile(join(bundledSeedRoot, name, "SKILL.md"), "utf8"),
+      );
+    } catch {
+      description = "";
+    }
+    listing.push({ name, description });
+  }
+  listing.sort((a, b) => a.name.localeCompare(b.name));
+  baselineListingCache = listing;
+  return listing;
+}
+
 export async function seedBaselineSkills(runtimeHome: string): Promise<string[]> {
   bundledDigestCache ??= await collectSkillDigests(bundledSeedRoot);
   return syncFromDigests(runtimeHome, bundledSeedRoot, bundledDigestCache);

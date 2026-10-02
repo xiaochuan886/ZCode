@@ -19,13 +19,15 @@ export interface ImportableSkillView {
   workspaceId: string | null;
   workspaceName: string | null;
   alreadyImported: boolean;
+  /** 网关基线种子自带(skill-seed 的内置集),导入属冗余复制;UI 据此打「系统预置」标。 */
+  preset: boolean;
 }
 
 /**
  * 解析 SKILL.md frontmatter 的单行 description。多行/折叠写法不展开,
  * 列表展示足够;截断到 400 字符避免超长描述撑爆选择器。
  */
-function parseSkillDescription(content: string): string {
+export function parseSkillDescription(content: string): string {
   if (!content.startsWith("---")) return "";
   const end = content.indexOf("\n---", 3);
   if (end < 0) return "";
@@ -76,6 +78,7 @@ async function scanRoot(
         workspaceId: root.workspace?.id ?? null,
         workspaceName: root.workspace?.name ?? null,
         alreadyImported: importedNames.has(entry.name),
+        preset: false,
       });
     }
   }
@@ -91,6 +94,8 @@ export async function listImportableSkills(input: {
   runtimeHome: string;
   workspaces: ImportableSkillWorkspace[];
   importedNames: ReadonlySet<string>;
+  /** 基线种子的名字集;命中且来源为 home 的行标记 preset(工作区副本不算预置)。 */
+  presetNames?: ReadonlySet<string>;
   maxBytes?: number;
 }): Promise<ImportableSkillView[]> {
   const maxBytes = input.maxBytes ?? 1024 * 1024;
@@ -98,7 +103,13 @@ export async function listImportableSkills(input: {
   for (const workspace of input.workspaces)
     roots.push({ origin: "workspace", base: workspace.workspacePath, workspace });
   const views: ImportableSkillView[] = [];
-  for (const root of roots) views.push(...(await scanRoot(root, input.importedNames, maxBytes)));
+  for (const root of roots)
+    views.push(
+      ...(await scanRoot(root, input.importedNames, maxBytes)).map((view) => ({
+        ...view,
+        preset: view.origin === "home" && (input.presetNames ?? new Set()).has(view.name),
+      })),
+    );
   views.sort((a, b) => a.name.localeCompare(b.name) || a.origin.localeCompare(b.origin));
   return views;
 }

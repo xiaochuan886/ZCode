@@ -26,6 +26,15 @@ const zh = {
   detailContentLabel: "内容 (SKILL.md)",
   /** 导入选择器按名称过滤无结果时的空态文案。 */
   importSkillSearchEmpty: "没有匹配的 Skill",
+  /** 系统预置分组标题:网关基线种子,每个专家运行时自带。 */
+  presetGroupTitle: "系统预置 Skill",
+  /** 系统预置分组说明:与租户共享是两条通道,只读、随网关升级刷新。 */
+  presetGroupHint:
+    "网关内置基线,每个专家运行时自带,随网关升级自动刷新;无需导入,也不支持逐租户删除。",
+  /** 导入弹窗中预置行的徽标(替代 Home 徽标,提示导入属冗余复制)。 */
+  presetBadge: "系统预置",
+  /** 导入弹窗预置收起区的折叠标题。 */
+  presetImportSectionTitle: "系统预置(已自带,无需导入)",
 };
 
 const en: Record<keyof typeof zh, string> = {
@@ -41,6 +50,11 @@ const en: Record<keyof typeof zh, string> = {
   detailCreatedAtLabel: "Created at",
   detailContentLabel: "Content (SKILL.md)",
   importSkillSearchEmpty: "No matching skills",
+  presetGroupTitle: "System preset skills",
+  presetGroupHint:
+    "Bundled with the gateway; every expert runtime ships them and upgrades refresh them automatically. No import needed, and they cannot be removed per tenant.",
+  presetBadge: "Preset",
+  presetImportSectionTitle: "Preset (already built-in, no import needed)",
 };
 
 export const skillTabStrings = { zh, en };

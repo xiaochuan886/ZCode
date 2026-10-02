@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Import, Plus } from "lucide-react";
+import { ChevronDown, ChevronRight, Import, Plus } from "lucide-react";
 import {
   Button,
   Dialog,
@@ -21,6 +21,7 @@ import {
   createEnterpriseClient,
   EnterpriseApiError,
   type ImportableTenantSkillView,
+  type PresetSkillView,
   type TenantSkillView,
 } from "./api.js";
 import { zh } from "./presentation.js";
@@ -55,6 +56,7 @@ export function EnterpriseSkillSettings({
   const s = t === zh ? skillTabStrings.zh : skillTabStrings.en;
   const [skills, setSkills] = useState<TenantSkillView[]>([]);
   const [skillsFailed, setSkillsFailed] = useState(false);
+  const [presets, setPresets] = useState<PresetSkillView[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [skillName, setSkillName] = useState("");
   const [skillContent, setSkillContent] = useState("");
@@ -62,6 +64,7 @@ export function EnterpriseSkillSettings({
   const [importables, setImportables] = useState<ImportableTenantSkillView[] | null>(null);
   const [importFilter, setImportFilter] = useState("");
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [presetExpanded, setPresetExpanded] = useState(false);
   const [detailSkill, setDetailSkill] = useState<TenantSkillView | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +82,13 @@ export function EnterpriseSkillSettings({
 
   useEffect(() => {
     reloadSkills();
-  }, [reloadSkills]);
+    // 系统预置清单只随网关升级变化,失败静默为空(只读展示面,不值得报错横幅)。
+    if (tenantId)
+      api
+        .presetSkills(tenantId)
+        .then(setPresets)
+        .catch(() => setPresets([]));
+  }, [reloadSkills, tenantId]);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -160,6 +169,10 @@ export function EnterpriseSkillSettings({
   const filteredImportables = (importables ?? []).filter((item) =>
     item.name.toLowerCase().includes(importFilter.trim().toLowerCase()),
   );
+  // 系统预置行与普通行分流:预置每个专家自带,导入属冗余,默认收起;过滤时自动展开。
+  const filteredPresetImportables = filteredImportables.filter((item) => item.preset);
+  const filteredNormalImportables = filteredImportables.filter((item) => !item.preset);
+  const presetSectionVisible = presetExpanded || importFilter.trim().length > 0;
 
   /**
    * 共享 Skill 目录的描述行:优先取 frontmatter 里的 description,否则取正文首个非空行。
@@ -254,6 +267,22 @@ export function EnterpriseSkillSettings({
             />
           )}
 
+          {/* 系统预置 Skill:网关基线种子,每个专家运行时自带,与租户共享是两条通道。
+              只读展示(无增删/导入动作),让管理员分清"自带"与"我共享的"。 */}
+          {presets.length > 0 ? (
+            <section className="flex flex-col gap-4" data-testid="enterprise-preset-skills">
+              <SettingsResourceGroupHeader title={s.presetGroupTitle} count={presets.length} />
+              <p className="text-ui-xs text-foreground-subtle">{s.presetGroupHint}</p>
+              <SettingsResourceList
+                items={presets}
+                getKey={(preset) => preset.name}
+                renderItem={(preset) => (
+                  <SkillResourceRow name={preset.name} description={preset.description} />
+                )}
+              />
+            </section>
+          ) : null}
+
           {/* 手工创建:常驻表单改为弹窗(原生动线),字段与提交条件不变。
               限高 + 内容区滚动(与详情弹窗同构),长文本不会把弹窗撑出视口。 */}
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -332,47 +361,113 @@ export function EnterpriseSkillSettings({
                         {s.importSkillSearchEmpty}
                       </p>
                     ) : (
-                      <SettingsResourceList
-                        items={filteredImportables}
-                        getKey={(item) => `${item.origin}:${item.workspaceId ?? ""}:${item.name}`}
-                        renderItem={(item) => (
-                          <SkillResourceRow
-                            name={item.name}
-                            description={item.description}
-                            titleExtra={
-                              <>
-                                <span className={SKILL_BADGE_CLASS_NAME}>
-                                  {t.importSkillOriginHome}
-                                </span>
-                                {item.origin === "workspace" ? (
-                                  <span className={SKILL_BADGE_CLASS_NAME}>
-                                    {t.importSkillOriginWorkspace}
-                                    {item.workspaceName ? ` · ${item.workspaceName}` : ""}
-                                  </span>
-                                ) : null}
-                                {item.alreadyImported ? (
-                                  <span className={SKILL_BADGE_CLASS_NAME}>
-                                    {t.importSkillAlreadyImported}
-                                  </span>
-                                ) : null}
-                              </>
+                      <div className="flex flex-col gap-2">
+                        {filteredNormalImportables.length > 0 ? (
+                          <SettingsResourceList
+                            items={filteredNormalImportables}
+                            getKey={(item) =>
+                              `${item.origin}:${item.workspaceId ?? ""}:${item.name}`
                             }
-                            trailingExtra={
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                disabled={busy || item.alreadyImported}
-                                onClick={() => importSkill(item)}
-                              >
-                                {item.alreadyImported
-                                  ? t.importSkillAlreadyImported
-                                  : t.importSkillAction}
-                              </Button>
-                            }
+                            renderItem={(item) => (
+                              <SkillResourceRow
+                                name={item.name}
+                                description={item.description}
+                                titleExtra={
+                                  <>
+                                    <span className={SKILL_BADGE_CLASS_NAME}>
+                                      {item.origin === "home"
+                                        ? t.importSkillOriginHome
+                                        : t.importSkillOriginWorkspace}
+                                    </span>
+                                    {item.origin === "workspace" && item.workspaceName ? (
+                                      <span className={SKILL_BADGE_CLASS_NAME}>
+                                        {item.workspaceName}
+                                      </span>
+                                    ) : null}
+                                    {item.alreadyImported ? (
+                                      <span className={SKILL_BADGE_CLASS_NAME}>
+                                        {t.importSkillAlreadyImported}
+                                      </span>
+                                    ) : null}
+                                  </>
+                                }
+                                trailingExtra={
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    disabled={busy || item.alreadyImported}
+                                    onClick={() => importSkill(item)}
+                                  >
+                                    {item.alreadyImported
+                                      ? t.importSkillAlreadyImported
+                                      : t.importSkillAction}
+                                  </Button>
+                                }
+                              />
+                            )}
                           />
-                        )}
-                      />
+                        ) : null}
+                        {filteredPresetImportables.length > 0 ? (
+                          <div className="flex flex-col gap-2">
+                            <button
+                              type="button"
+                              className="flex items-center gap-1 self-start text-ui-sm text-foreground-subtle hover:text-foreground"
+                              aria-expanded={presetSectionVisible}
+                              onClick={() => setPresetExpanded((prev) => !prev)}
+                            >
+                              {presetSectionVisible ? (
+                                <ChevronDown className="size-3.5" aria-hidden="true" />
+                              ) : (
+                                <ChevronRight className="size-3.5" aria-hidden="true" />
+                              )}
+                              {s.presetImportSectionTitle}
+                              <span className="text-ui-sm font-normal text-foreground-subtle">
+                                {filteredPresetImportables.length}
+                              </span>
+                            </button>
+                            {presetSectionVisible ? (
+                              <SettingsResourceList
+                                items={filteredPresetImportables}
+                                getKey={(item) =>
+                                  `${item.origin}:${item.workspaceId ?? ""}:${item.name}`
+                                }
+                                renderItem={(item) => (
+                                  <SkillResourceRow
+                                    name={item.name}
+                                    description={item.description}
+                                    titleExtra={
+                                      <>
+                                        <span className={SKILL_BADGE_CLASS_NAME}>
+                                          {s.presetBadge}
+                                        </span>
+                                        {item.alreadyImported ? (
+                                          <span className={SKILL_BADGE_CLASS_NAME}>
+                                            {t.importSkillAlreadyImported}
+                                          </span>
+                                        ) : null}
+                                      </>
+                                    }
+                                    trailingExtra={
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={busy || item.alreadyImported}
+                                        onClick={() => importSkill(item)}
+                                      >
+                                        {item.alreadyImported
+                                          ? t.importSkillAlreadyImported
+                                          : t.importSkillAction}
+                                      </Button>
+                                    }
+                                  />
+                                )}
+                              />
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
                     )}
                   </div>
                 )}

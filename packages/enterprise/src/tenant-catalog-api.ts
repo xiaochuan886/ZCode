@@ -8,6 +8,7 @@ import type {
 import { EnterpriseError, expertRuntimeId } from "./types.js";
 import { requireTenantAdmin } from "./admin-guard.js";
 import { isTenantMcpEndpointAllowed, isTenantMcpSecretRef } from "./mcp-policy.js";
+import { listBaselineSkills } from "./skill-seed.js";
 import { listImportableSkills, readImportableSkill } from "./skill-import.js";
 import type { TenantModelProviderInput, TenantModelProviderPatch } from "./provider-format.js";
 import type {
@@ -317,6 +318,8 @@ export async function handleTenantCatalogApiRequest(
     const importedNames = new Set(
       options.store.listTenantSkills(session.userId, tenantId).map((skill) => skill.name),
     );
+    // 基线种子名集用于给行打 preset 标:预置技能每个专家自带,导入属冗余复制。
+    const presetNames = new Set((await listBaselineSkills()).map((skill) => skill.name));
     // 无数据根(process 模式)时 HOME 不存在,清单为空而不是报错。
     const listing = options.modelRuntimeDataRoot
       ? await listImportableSkills({
@@ -326,10 +329,20 @@ export async function handleTenantCatalogApiRequest(
           ),
           workspaces: visibleWorkspaces(options.store, session.userId, tenantId),
           importedNames,
+          presetNames,
           maxBytes: maxPersonalSkillBytes,
         })
       : [];
     send(response, 200, listing);
+    return true;
+  }
+
+  const presetSkills = path.match(/^\/api\/enterprise\/tenants\/([^/]+)\/preset-skills$/);
+  if (presetSkills && method === "GET") {
+    // 系统预置 Skill 只读清单:直接来自网关捆绑 seed 目录,随网关升级刷新,
+    // 不落 tenant_skills,管理员无法(也不应)逐租户增删。
+    requireTenantAdmin(options, session, presetSkills[1]!);
+    send(response, 200, await listBaselineSkills());
     return true;
   }
 

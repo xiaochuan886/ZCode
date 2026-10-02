@@ -131,6 +131,13 @@ export interface ImportableTenantSkillView {
   workspaceId: string | null;
   workspaceName: string | null;
   alreadyImported: boolean;
+  /** 网关基线种子自带(每个专家运行时都有),导入属冗余复制,UI 打「系统预置」标。 */
+  preset: boolean;
+}
+/** 系统预置 Skill(只读):来自网关捆绑 seed 目录,随网关升级刷新,不落共享表。 */
+export interface PresetSkillView {
+  name: string;
+  description: string;
 }
 export interface TenantSkillImportInput {
   name: string;

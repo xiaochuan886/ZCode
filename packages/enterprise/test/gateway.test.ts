@@ -1420,6 +1420,12 @@ test("importable skill listing covers expert home and customer workspaces", asyn
     join(homeAgents, "personal-thing", "SKILL.md"),
     "---\nname: personal-thing\ndescription: Personal helper kept in HOME.\n---\n# Helper\n",
   );
+  // 与网关基线种子同名的 HOME 副本:清单必须标 preset(导入属冗余复制)。
+  await mkdir(join(homeAgents, "docx"), { recursive: true });
+  await writeFile(
+    join(homeAgents, "docx", "SKILL.md"),
+    "---\nname: docx\ndescription: Local docx copy shadowing the baseline.\n---\n# Docx\n",
+  );
   const gateway = createEnterpriseGateway({
     store,
     auth: new EnterpriseAuth(store),
@@ -1438,6 +1444,7 @@ test("importable skill listing covers expert home and customer workspaces", asyn
     workspaceId: string | null;
     workspaceName: string | null;
     alreadyImported: boolean;
+    preset: boolean;
   };
   try {
     const adminSession = await login(base, user.email);
@@ -1459,12 +1466,36 @@ test("importable skill listing covers expert home and customer workspaces", asyn
     const listing = (await response.json()) as Importable[];
     assert.deepEqual(listing.map((item) => [item.name, item.origin, item.workspaceName]).sort(), [
       ["deploy-helper", "workspace", "Acme"],
+      ["docx", "home", null],
       ["personal-thing", "home", null],
     ]);
     assert.equal(
       listing.find((item) => item.name === "deploy-helper")!.description,
       "Deploy runbooks for Acme clusters.",
     );
+    // 基线种子命中的 home 行标 preset;个人/工作区行不标。
+    assert.equal(listing.find((item) => item.name === "docx")!.preset, true);
+    assert.equal(listing.find((item) => item.name === "personal-thing")!.preset, false);
+    assert.equal(listing.find((item) => item.name === "deploy-helper")!.preset, false);
+    // 系统预置清单端点:成员 403;管理员拿到捆绑基线(含 docx 与描述),只读。
+    response = await api(
+      base,
+      memberSession,
+      `/api/enterprise/tenants/${tenant.id}/preset-skills`,
+      "GET",
+    );
+    assert.equal(response.status, 403);
+    response = await api(
+      base,
+      adminSession,
+      `/api/enterprise/tenants/${tenant.id}/preset-skills`,
+      "GET",
+    );
+    assert.equal(response.status, 200);
+    const presets = (await response.json()) as Array<{ name: string; description: string }>;
+    const presetDocx = presets.find((item) => item.name === "docx");
+    assert.ok(presetDocx, "bundled baseline must include docx");
+    assert.ok(presetDocx.description.length > 0);
     // 工作区来源必须带 workspaceId 才能命中;导入后清单翻转为已导入。
     response = await api(
       base,
