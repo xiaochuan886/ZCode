@@ -2,6 +2,20 @@ export { App } from "./App.js";
 export { AppErrorBoundary, ScopedErrorBoundary } from "./ErrorBoundary.js";
 export type { ScopedErrorBoundaryVariant } from "./ErrorBoundary.js";
 export { Button, buttonVariants } from "./components/ui/button.js";
+// 企业设置复用的原生展示层组件(数据由调用方注入,不携带服务耦合):
+// 模板选择器/API Key 输入/MCP 表单/设置表单原语。additive 导出,原生用法不变。
+export { ApiKeyInput } from "./settings/model-provider-section/ApiKeyInput.js";
+export { ProviderTemplatePicker } from "./settings/model-provider-section/ProviderTemplatePicker.js";
+export type { ProviderSettingsTemplateView } from "@zcode/provider";
+export { McpServerForm } from "./settings/McpServerForm.js";
+export type { FormState as McpFormState, McpEditorMode } from "./settings/mcpSettingsShared.js";
+export { SettingsFormActions } from "./settings/SettingsFormActions.js";
+export { SettingsFormTextarea } from "./settings/SettingsFormTextarea.js";
+export { SettingsSegmentedTabs } from "./settings/SettingsSegmentedTabs.js";
+export { Input } from "./components/ui/input.js";
+// 原生展示组件内的 ControlHintTooltip 依赖 TooltipProvider 上下文(原生 Root 内挂载,
+// 企业设置浮层在其外),导出供企业侧就近补挂。additive,原生用法不变。
+export { TooltipProvider } from "./components/ui/tooltip.js";
 export { DesktopWindowFrame } from "./DesktopWindowFrame.js";
 export {
   AssistantCodeCommentFeatureProvider,

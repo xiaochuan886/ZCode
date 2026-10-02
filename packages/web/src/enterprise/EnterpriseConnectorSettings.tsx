@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { Button } from "@zcode/ui";
 import {
   createEnterpriseClient,
   type TenantMcpConnectorPatch,
   type TenantMcpConnectorView,
 } from "./api.js";
-import { badge, button, chip, primary, zh } from "./presentation.js";
+import { badge, chip, zh } from "./presentation.js";
 import { EnterpriseConnectorForm, type ConnectorFormValue } from "./EnterpriseConnectorForm.js";
 
 const api = createEnterpriseClient();
@@ -14,6 +15,7 @@ type ConnectorFormTarget = { mode: "create" } | { mode: "edit"; connector: Tenan
 /**
  * 连接器 tab:租户级 MCP 连接器目录(管理员专属页面内的分区)。增删改与启停;
  * user-oauth 的连接/断开作用于操作者本人账号,当前也仅能从这里(管理员)触达。
+ * 列表排版对齐原生 McpServerList:bg-surface 圆角容器 + 发丝分隔线 + 行内操作按钮。
  */
 export function EnterpriseConnectorSettings({
   t,
@@ -149,9 +151,14 @@ export function EnterpriseConnectorSettings({
       ) : null}
       {!form ? (
         <div>
-          <button type="button" className={primary} onClick={() => setForm({ mode: "create" })}>
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            onClick={() => setForm({ mode: "create" })}
+          >
             {t.newConnector}
-          </button>
+          </Button>
         </div>
       ) : null}
       {form ? (
@@ -165,95 +172,124 @@ export function EnterpriseConnectorSettings({
         />
       ) : null}
       {connectors.length === 0 && !failed ? (
-        <p className="text-ui-sm text-foreground-subtle">{t.noConnectors}</p>
+        // 空态镜像原生 McpServerList:虚线圆角框 + 居中提示 + 创建入口。
+        <div className="overflow-hidden rounded-xl border border-dashed border-border">
+          <div className="flex flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+            <div className="space-y-1">
+              <div className="text-ui-base font-medium text-foreground">{t.noConnectors}</div>
+            </div>
+            {form ? null : (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setForm({ mode: "create" })}
+              >
+                {t.newConnector}
+              </Button>
+            )}
+          </div>
+        </div>
       ) : (
-        <ul className="flex flex-col gap-2" data-testid="enterprise-settings-connectors">
-          {connectors.map((connector) => (
-            <li
-              key={connector.id}
-              className="flex flex-col gap-2 rounded-lg border border-border bg-card px-3 py-2"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <strong className="text-ui-sm font-medium">{connector.displayName}</strong>
-                <code className={chip}>{connector.connectorKey}</code>
-                <span className={`${badge} border-primary text-foreground`}>
-                  {connector.authMode === "user-oauth"
-                    ? t.userConnectorBadge
-                    : t.systemConnectorBadge}
-                </span>
-                {connector.authMode === "user-oauth" ? (
-                  <span
-                    className={
-                      connector.authorized ? badge : `${badge} border-destructive text-destructive`
-                    }
-                  >
-                    {connector.authorized ? t.connectorConnected : t.connectorNotConnected}
-                  </span>
-                ) : (
-                  <span
-                    className={
-                      connector.secretConfigured
-                        ? badge
-                        : `${badge} border-destructive text-destructive`
-                    }
-                  >
-                    {connector.secretConfigured ? t.secretConfigured : t.secretNotConfigured}
-                  </span>
-                )}
-                <span className={badge}>{connector.enabled ? t.enabledOn : t.enabledOff}</span>
-              </div>
-              <div className="text-ui-xs text-foreground-subtle">
-                {connector.endpointHost} · {connector.headerName}
-                {connector.authMode === "user-oauth" ? ` · ${t.connectorUserAuthHint}` : ""}
-              </div>
-              {connector.authMode === "user-oauth" ? (
-                <div className="flex flex-wrap gap-2">
-                  {connector.authorized ? (
-                    <button
-                      type="button"
-                      className={button}
-                      disabled={busy}
-                      onClick={() => disconnectConnector(connector)}
-                    >
-                      {t.connectorDisconnect}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className={primary}
-                      disabled={busy}
-                      onClick={() => connectConnector(connector)}
-                    >
-                      {t.connectorConnect}
-                    </button>
-                  )}
+        <ul
+          className="overflow-hidden rounded-xl bg-surface"
+          data-testid="enterprise-settings-connectors"
+        >
+          {connectors.map((connector, index) => (
+            <li key={connector.id}>
+              {index > 0 ? <div className="h-px bg-border/50" aria-hidden="true" /> : null}
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-ui-base font-medium text-foreground">
+                      {connector.displayName}
+                    </span>
+                    <code className={chip}>{connector.connectorKey}</code>
+                    <span className={`${badge} border-primary text-foreground`}>
+                      {connector.authMode === "user-oauth"
+                        ? t.userConnectorBadge
+                        : t.systemConnectorBadge}
+                    </span>
+                    {connector.authMode === "user-oauth" ? (
+                      <span
+                        className={
+                          connector.authorized
+                            ? badge
+                            : `${badge} border-destructive text-destructive`
+                        }
+                      >
+                        {connector.authorized ? t.connectorConnected : t.connectorNotConnected}
+                      </span>
+                    ) : (
+                      <span
+                        className={
+                          connector.secretConfigured
+                            ? badge
+                            : `${badge} border-destructive text-destructive`
+                        }
+                      >
+                        {connector.secretConfigured ? t.secretConfigured : t.secretNotConfigured}
+                      </span>
+                    )}
+                    <span className={badge}>{connector.enabled ? t.enabledOn : t.enabledOff}</span>
+                  </div>
+                  <div className="mt-1 text-ui-sm text-foreground-subtle">
+                    {connector.endpointHost} · {connector.headerName}
+                    {connector.authMode === "user-oauth" ? ` · ${t.connectorUserAuthHint}` : ""}
+                  </div>
                 </div>
-              ) : null}
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className={button}
-                  disabled={busy}
-                  onClick={() => setForm({ mode: "edit", connector })}
-                >
-                  {t.edit}
-                </button>
-                <button
-                  type="button"
-                  className={button}
-                  disabled={busy}
-                  onClick={() => toggleEnabled(connector)}
-                >
-                  {connector.enabled ? t.disableAction : t.enableAction}
-                </button>
-                <button
-                  type="button"
-                  className={button}
-                  disabled={busy}
-                  onClick={() => removeConnector(connector)}
-                >
-                  {t.deleteAction}
-                </button>
+                <div className="flex shrink-0 flex-wrap items-center gap-2">
+                  {connector.authMode === "user-oauth" ? (
+                    connector.authorized ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => disconnectConnector(connector)}
+                      >
+                        {t.connectorDisconnect}
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => connectConnector(connector)}
+                      >
+                        {t.connectorConnect}
+                      </Button>
+                    )
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => setForm({ mode: "edit", connector })}
+                  >
+                    {t.edit}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy}
+                    onClick={() => toggleEnabled(connector)}
+                  >
+                    {connector.enabled ? t.disableAction : t.enableAction}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    disabled={busy}
+                    onClick={() => removeConnector(connector)}
+                  >
+                    {t.deleteAction}
+                  </Button>
+                </div>
               </div>
             </li>
           ))}

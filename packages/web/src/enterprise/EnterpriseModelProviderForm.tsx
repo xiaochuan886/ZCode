@@ -1,6 +1,15 @@
 import { useState } from "react";
+import {
+  ApiKeyInput,
+  Button,
+  Input,
+  SettingsFormActions,
+  SettingsFormTextarea,
+  SettingsSegmentedTabs,
+} from "@zcode/ui";
 import type { ModelApiType, ModelProviderView } from "./api.js";
-import { button, field, primary, zh } from "./presentation.js";
+import { field, zh } from "./presentation.js";
+import { modelTabStrings } from "./model-tab-strings.js";
 
 export interface ModelProviderFormValue {
   providerKey: string;
@@ -14,6 +23,17 @@ export interface ModelProviderFormValue {
   enabled: boolean;
 }
 
+/** 新建时的预填草稿:模板来源带全量字段,自定义来源只带显示名。编辑模式不使用。 */
+export interface ModelProviderFormPrefill {
+  providerKey: string;
+  displayName: string;
+  apiType: ModelApiType;
+  baseUrl: string;
+  models: string[];
+  /** 模板自带的控制台地址,展示「获取 API Key」提示链接;没有则不展示。 */
+  apiKeyManagementUrl?: string;
+}
+
 /** 模型列表输入支持逗号(含中文逗号)或换行分隔,解析时统一去重保序。 */
 export function parseModelListText(text: string): string[] {
   const seen = new Set<string>();
@@ -24,30 +44,48 @@ export function parseModelListText(text: string): string[] {
   return [...seen];
 }
 
+/** API 协议是技术名称,不进翻译;用原生分段控件替代下拉,两值枚举更贴合设置页习惯。 */
+const apiTypeItems: readonly { label: string; value: ModelApiType }[] = [
+  { label: "Anthropic Messages", value: "anthropic-messages" },
+  { label: "OpenAI Chat Completions", value: "openai-chat-completions" },
+];
+
 /**
  * 新增/编辑供应商共用表单:providerKey 创建后不可变;编辑时 apiKey 留空表示保留现有密钥。
- * 通过外层 key 重挂载来重置草稿,组件内部不监听 initial 变化。
+ * 通过外层 key 重挂载来重置草稿,组件内部不监听 initial/prefill 变化。
  */
 export function EnterpriseModelProviderForm({
   t,
   initial,
+  prefill,
   busy,
   onSubmit,
   onCancel,
 }: {
   t: typeof zh;
   initial: ModelProviderView | null;
+  prefill: ModelProviderFormPrefill | null;
   busy: boolean;
   onSubmit: (value: ModelProviderFormValue) => void;
   onCancel: () => void;
 }) {
+  const s = t === zh ? modelTabStrings.zh : modelTabStrings.en;
   const editing = initial !== null;
-  const [providerKey, setProviderKey] = useState(initial?.providerKey ?? "");
-  const [displayName, setDisplayName] = useState(initial?.displayName ?? "");
-  const [apiType, setApiType] = useState<ModelApiType>(initial?.apiType ?? "anthropic-messages");
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? "");
+  const [providerKey, setProviderKey] = useState(
+    initial?.providerKey ?? prefill?.providerKey ?? "",
+  );
+  const [displayName, setDisplayName] = useState(
+    initial?.displayName ?? prefill?.displayName ?? "",
+  );
+  const [apiType, setApiType] = useState<ModelApiType>(
+    initial?.apiType ?? prefill?.apiType ?? "anthropic-messages",
+  );
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? prefill?.baseUrl ?? "");
   const [apiKey, setApiKey] = useState("");
-  const [modelsText, setModelsText] = useState(initial?.models.join("\n") ?? "");
+  const [apiKeyVisible, setApiKeyVisible] = useState(false);
+  const [modelsText, setModelsText] = useState(
+    initial?.models.join("\n") ?? prefill?.models.join("\n") ?? "",
+  );
   const [defaultModel, setDefaultModel] = useState(initial?.defaultModel ?? "");
   const [isDefault, setIsDefault] = useState(initial?.isDefault ?? false);
   const [enabled, setEnabled] = useState(initial?.enabled ?? true);
@@ -78,7 +116,7 @@ export function EnterpriseModelProviderForm({
 
   return (
     <form
-      className="flex flex-col gap-3 rounded-lg border border-border bg-card p-3"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-card p-4"
       data-testid="enterprise-provider-form"
       onSubmit={(event) => {
         event.preventDefault();
@@ -88,8 +126,8 @@ export function EnterpriseModelProviderForm({
       <div className="flex flex-wrap gap-3">
         <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerKey}
-          <input
-            className={field}
+          <Input
+            className="h-9"
             value={providerKey}
             placeholder="my-provider"
             autoComplete="off"
@@ -101,8 +139,8 @@ export function EnterpriseModelProviderForm({
         </label>
         <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerDisplayName}
-          <input
-            className={field}
+          <Input
+            className="h-9"
             value={displayName}
             autoComplete="off"
             disabled={busy}
@@ -111,22 +149,21 @@ export function EnterpriseModelProviderForm({
         </label>
       </div>
       <div className="flex flex-wrap gap-3">
-        <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
+        <div className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerApiType}
-          <select
-            className={field}
-            value={apiType}
-            disabled={busy}
-            onChange={(event) => setApiType(event.target.value as ModelApiType)}
-          >
-            <option value="anthropic-messages">Anthropic Messages</option>
-            <option value="openai-chat-completions">OpenAI Chat Completions</option>
-          </select>
-        </label>
+          {/* 原生分段控件不提供 disabled,忙碌态用包裹层截断交互并保持视觉一致。 */}
+          <div className={busy ? "pointer-events-none opacity-50" : undefined}>
+            <SettingsSegmentedTabs
+              items={apiTypeItems}
+              value={apiType}
+              onValueChange={setApiType}
+            />
+          </div>
+        </div>
         <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerBaseUrl}
-          <input
-            className={field}
+          <Input
+            className="h-9"
             type="url"
             placeholder="https://api.example.com/v1"
             autoComplete="off"
@@ -137,27 +174,38 @@ export function EnterpriseModelProviderForm({
           />
         </label>
       </div>
-      <label className="flex flex-col gap-1 text-ui-sm">
-        {t.providerApiKey}
-        <input
-          className={field}
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          disabled={busy}
+      <div className="flex flex-col gap-1 text-ui-sm">
+        <div className="flex items-center justify-between gap-2">
+          <label>{t.providerApiKey}</label>
+          {prefill?.apiKeyManagementUrl && !editing ? (
+            <a
+              href={prefill.apiKeyManagementUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-ui-sm text-primary underline-offset-4 hover:underline"
+            >
+              {s.getApiKeyLink}
+            </a>
+          ) : null}
+        </div>
+        <ApiKeyInput
           value={apiKey}
-          placeholder={editing ? `••••${initial?.apiKeyLast4 ?? ""}` : t.providerApiKeyPlaceholder}
-          onChange={(event) => setApiKey(event.target.value)}
+          visible={apiKeyVisible}
+          onChange={setApiKey}
+          onBlur={() => setApiKey((current) => current.trim())}
+          onToggleVisibility={() => setApiKeyVisible((current) => !current)}
         />
         {editing ? (
           <span className="text-ui-xs text-foreground-subtle">{t.providerApiKeyKeepHint}</span>
+        ) : prefill?.apiKeyManagementUrl ? (
+          <span className="text-ui-xs text-foreground-subtle">{s.templatePrefillHint}</span>
         ) : null}
-      </label>
+      </div>
       <div className="flex flex-wrap gap-3">
         <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerModels}
-          <textarea
-            className={`${field} min-h-20 font-mono text-ui-sm`}
+          <SettingsFormTextarea
+            className="min-h-20 font-mono text-ui-sm"
             value={modelsText}
             placeholder={t.providerModelsPlaceholder}
             spellCheck={false}
@@ -168,7 +216,7 @@ export function EnterpriseModelProviderForm({
         <label className="flex min-w-48 flex-1 flex-col gap-1 text-ui-sm">
           {t.providerDefaultModel}
           <select
-            className={field}
+            className={`${field} h-9 px-3 py-0`}
             value={selectedDefault}
             disabled={busy}
             onChange={(event) => setDefaultModel(event.target.value)}
@@ -202,14 +250,14 @@ export function EnterpriseModelProviderForm({
           {t.providerEnabled}
         </label>
       </div>
-      <div className="flex justify-end gap-2">
-        <button type="button" className={button} onClick={onCancel} disabled={busy}>
+      <SettingsFormActions>
+        <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
           {t.cancel}
-        </button>
-        <button type="submit" className={primary} disabled={busy || !complete}>
+        </Button>
+        <Button type="submit" disabled={busy || !complete}>
           {editing ? t.save : t.create}
-        </button>
-      </div>
+        </Button>
+      </SettingsFormActions>
     </form>
   );
 }
